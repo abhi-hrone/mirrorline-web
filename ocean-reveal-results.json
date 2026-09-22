@@ -1,0 +1,12 @@
+{
+  "source": "in-memory reveal-store, dumped from running dev server via /api/contacts/reveal-status",
+  "dumpedAt": "2026-09-22",
+  "note": "Company/lookalike data for this run was not persisted anywhere (browser-only state) and could not be recovered.",
+  "results": {
+    "9caba15201607501": { "status": "pending", "email": "arthi.raja@zoho.com", "emailDone": true },
+    "5cab70b8232e124e": { "status": "pending", "email": "ashok.ganesan@zoho.com", "emailDone": true },
+    "28b637838847a290": { "status": "pending", "email": "dsarathy.dsarathygmailcom@zoho.com", "emailDone": true },
+    "b21e30549050f94e": { "status": "pending", "email": "sivaramakrishnan.iswaran@zohocorp.com", "emailDone": true },
+    "dd67c4fb6d29a5f4": { "status": "revealed", "email": "shailesh.davey@zoho.com", "emailDone": true, "phone": "+14422707070", "phoneDone": true }
+  }
+}

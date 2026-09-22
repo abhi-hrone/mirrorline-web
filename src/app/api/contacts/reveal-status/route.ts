@@ -7,8 +7,9 @@ export async function POST(req: NextRequest) {
     ? body.ids.filter((id: unknown): id is string => typeof id === "string")
     : [];
 
-  const results = Object.fromEntries(
-    ids.map((id) => [id, getReveal(id) ?? { status: "pending" as const }])
+  const entries = await Promise.all(
+    ids.map(async (id) => [id, (await getReveal(id)) ?? { status: "pending" as const }] as const)
   );
+  const results = Object.fromEntries(entries);
   return NextResponse.json({ results });
 }

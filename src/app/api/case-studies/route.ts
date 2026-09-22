@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Exa from "exa-js";
+import { normalizeDomain } from "@/lib/domain";
+import { getCachedCaseStudies, saveCaseStudies } from "@/lib/research-cache";
 
 export const maxDuration = 300;
 
@@ -81,6 +83,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "prospectUrl is required." }, { status: 400 });
   }
 
+  const domain = normalizeDomain(prospectUrl);
+  const cached = await getCachedCaseStudies(domain).catch((err) => {
+    console.error("Case studies cache lookup failed", err);
+    return null;
+  });
+  if (cached) {
+    return NextResponse.json({ caseStudies: cached, cached: true });
+  }
+
   const exa = new Exa(apiKey);
 
   try {
@@ -93,8 +104,13 @@ export async function POST(req: NextRequest) {
     const structured = completed.output?.structured as
       | { caseStudies?: unknown[] }
       | undefined;
+    const caseStudies = structured?.caseStudies ?? [];
 
-    return NextResponse.json({ caseStudies: structured?.caseStudies ?? [] });
+    await saveCaseStudies(domain, caseStudies).catch((err) =>
+      console.error("Case studies cache save failed", err)
+    );
+
+    return NextResponse.json({ caseStudies });
   } catch (err) {
     console.error("Exa case study search failed", err);
     return NextResponse.json(

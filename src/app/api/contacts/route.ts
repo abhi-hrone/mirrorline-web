@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setPending } from "@/lib/reveal-store";
+import { getCachedContacts, saveContacts, getCachedReveals } from "@/lib/research-cache";
 
 export const maxDuration = 120;
 
@@ -21,6 +22,17 @@ type OceanPerson = {
 };
 
 type CompanyInput = { name: string; domain: string; score: number };
+type ContactConfidence = "Verified" | "Risky" | "Guessed" | "No email";
+type PersonOut = {
+  name: string;
+  title: string;
+  email: string;
+  phone: string;
+  linkedin: string;
+  conf: ContactConfidence;
+  id: string | null;
+  revealStatus: "pending" | "unavailable";
+};
 
 // Kicks off an async email/phone reveal for a batch of people via Ocean's
 // Reveal Emails/Phones APIs (personIds come from the search results above).
@@ -60,6 +72,12 @@ async function searchPeople(
   titles: string[],
   departments: string[]
 ) {
+  const cached = await getCachedContacts(domain, titles, departments).catch((err) => {
+    console.error("Contacts cache lookup failed", err);
+    return null;
+  });
+  if (cached) return cached as OceanPerson[];
+
   const res = await fetch(OCEAN_SEARCH_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-token": token },
@@ -78,7 +96,13 @@ async function searchPeople(
     throw new Error(`Ocean returned ${res.status}: ${await res.text()}`);
   }
   const data = (await res.json()) as { people?: OceanPerson[] };
-  return data.people ?? [];
+  const people = data.people ?? [];
+
+  await saveContacts(domain, titles, departments, people).catch((err) =>
+    console.error("Contacts cache save failed", err)
+  );
+
+  return people;
 }
 
 export async function POST(req: NextRequest) {
@@ -135,7 +159,7 @@ export async function POST(req: NextRequest) {
         company: c.name,
         domain: c.domain,
         score: c.score,
-        people: r.value.map((p) => ({
+        people: r.value.map((p): PersonOut => ({
           name: p.name ?? [p.firstName, p.lastName].filter(Boolean).join(" "),
           title: p.jobTitle ?? "",
           // Ocean's people search returns no emails or phones; requestReveals()
@@ -143,21 +167,42 @@ export async function POST(req: NextRequest) {
           email: "",
           phone: "",
           linkedin: p.linkedinUrl ?? "",
-          conf: "No email" as const,
+          conf: "No email",
           id: p.id ?? null,
-          revealStatus: "unavailable" as "pending" | "unavailable",
+          revealStatus: "unavailable",
         })),
       },
     ];
   });
 
   const revealTargets = groups.flatMap((g) => g.people.filter((p) => p.id));
+
+  const cachedReveals = await getCachedReveals(revealTargets.map((p) => p.id as string)).catch(
+    (err) => {
+      console.error("Reveal cache lookup failed", err);
+      return new Map<string, { status: string; email?: string; phone?: string }>();
+    }
+  );
+
+  // A cached "revealed" contact already has its final email/phone from a
+  // prior run — reuse it instead of spending another Ocean reveal credit.
+  // Anything not fully revealed yet (or never requested) gets a fresh ask.
+  const toRequest = revealTargets.filter((p) => {
+    const cached = cachedReveals.get(p.id as string);
+    if (!cached || cached.status !== "revealed") return true;
+    p.email = cached.email ?? "";
+    p.phone = cached.phone ?? "";
+    p.conf = cached.email ? "Verified" : p.conf;
+    p.revealStatus = "unavailable";
+    return false;
+  });
+
   const accepted = await requestReveals(
     token,
-    revealTargets.map((p) => p.id as string)
+    toRequest.map((p) => p.id as string)
   );
   if (accepted) {
-    revealTargets.forEach((p) => {
+    toRequest.forEach((p) => {
       setPending(p.id as string);
       p.revealStatus = "pending";
     });

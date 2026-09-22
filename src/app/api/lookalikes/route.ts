@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { normalizeDomain } from "@/lib/domain";
+import { getCachedLookalikes, saveLookalikes } from "@/lib/research-cache";
 
 const OCEAN_URL = "https://api.ocean.io/v3/search/companies";
 const RELEVANCE_SCORE: Record<string, number> = { A: 92, B: 82, C: 72 };
@@ -20,15 +22,6 @@ type OceanCompany = {
   employeeCountOcean?: string;
 };
 
-function normalizeDomain(input: string) {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/\/.*$/, "");
-}
-
 export async function POST(req: NextRequest) {
   const token = process.env.OCEAN_API_TOKEN;
   if (!token) {
@@ -42,6 +35,14 @@ export async function POST(req: NextRequest) {
   const domain = typeof body.domain === "string" ? normalizeDomain(body.domain) : "";
   if (!domain) {
     return NextResponse.json({ error: "domain is required." }, { status: 400 });
+  }
+
+  const cached = await getCachedLookalikes(domain).catch((err) => {
+    console.error("Lookalikes cache lookup failed", err);
+    return null;
+  });
+  if (cached) {
+    return NextResponse.json({ companies: cached, cached: true });
   }
 
   try {
@@ -98,6 +99,10 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
+
+    await saveLookalikes(domain, companies).catch((err) =>
+      console.error("Lookalikes cache save failed", err)
+    );
 
     return NextResponse.json({ companies });
   } catch (err) {

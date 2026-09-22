@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveReveal } from "@/lib/reveal-store";
+import { resolveEmail, resolvePhone } from "@/lib/reveal-store";
 
 type EmailResult = { personId: string; address?: string };
 type PhoneResult = { personId: string; numbers?: string[] };
@@ -15,10 +15,10 @@ export async function POST(req: NextRequest) {
   const phones: PhoneResult[] = Array.isArray(body.phones) ? body.phones : [];
 
   for (const e of emails) {
-    if (e?.personId) resolveReveal(e.personId, { email: e.address });
+    if (e?.personId) resolveEmail(e.personId, e.address);
   }
   for (const p of phones) {
-    if (p?.personId) resolveReveal(p.personId, { phone: p.numbers?.[0] });
+    if (p?.personId) resolvePhone(p.personId, p.numbers?.[0]);
   }
 
   return NextResponse.json({ ok: true });

@@ -191,7 +191,22 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
       .flatMap((g) => g.people)
       .filter((p) => p.revealStatus === "pending" && p.id)
       .map((p) => p.id as string);
-    if (pendingIds.length === 0 || attempt >= 15) return;
+    if (pendingIds.length === 0) return;
+
+    if (attempt >= 15) {
+      // Give up on whichever channel never arrived (usually because Ocean
+      // has no phone, or no email, on file for that person) so the UI stops
+      // showing "Revealing…" forever instead of leaving it stuck.
+      setContactGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          people: g.people.map((p) =>
+            p.revealStatus === "pending" ? { ...p, revealStatus: undefined } : p
+          ),
+        }))
+      );
+      return;
+    }
 
     setTimeout(async () => {
       try {
@@ -203,7 +218,13 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         const data = await res.json();
         const results: Record<
           string,
-          { status: "pending" | "revealed" | "unavailable"; email?: string; phone?: string }
+          {
+            status: "pending" | "revealed" | "unavailable";
+            email?: string;
+            phone?: string;
+            emailDone?: boolean;
+            phoneDone?: boolean;
+          }
         > = data.results ?? {};
 
         setContactGroups((prev) => {
@@ -211,13 +232,17 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
             ...g,
             people: g.people.map((p) => {
               const r = p.id ? results[p.id] : undefined;
-              if (!r || r.status === "pending") return p;
+              if (!r) return p;
+              // Apply whichever channel has resolved so far — don't wait on
+              // the other one, it may never arrive. Only stop polling this
+              // contact once both channels are accounted for.
+              const bothDone = !!r.emailDone && !!r.phoneDone;
               return {
                 ...p,
                 email: r.email || p.email,
                 phone: r.phone || p.phone,
                 conf: r.email ? ("Verified" as const) : p.conf,
-                revealStatus: undefined,
+                revealStatus: bothDone ? undefined : p.revealStatus,
               };
             }),
           }));
