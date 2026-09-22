@@ -1,0 +1,302 @@
+"use client";
+
+import { createContext, useContext, useState } from "react";
+import { BUSINESS_DEPARTMENTS } from "./departments";
+import {
+  CASE_QS,
+  Company,
+  ContactGroup,
+  INITIAL_SEQUENCE,
+  SequenceStep,
+  CaseStudyOption,
+  caseStudyToAnswers,
+} from "./mock-data";
+
+type WizardState = {
+  seedName: string;
+  seedWebsite: string;
+  setSeedName: (v: string) => void;
+  setSeedWebsite: (v: string) => void;
+  targetTitles: string;
+  setTargetTitles: (v: string) => void;
+  targetDepartments: string[];
+  toggleDepartment: (d: string) => void;
+  setTargetDepartments: (v: string[]) => void;
+
+  answers: Record<string, string>;
+  setAnswer: (id: string, value: string) => void;
+
+  caseStudyOptions: CaseStudyOption[];
+  caseStudyStatus: "idle" | "loading" | "error";
+  caseStudyError: string | null;
+  selectedCaseStudyUrl: string | null;
+  findCaseStudies: () => Promise<void>;
+  selectCaseStudy: (cs: CaseStudyOption) => void;
+
+  companies: Company[];
+  lookalikeStatus: "idle" | "loading" | "error";
+  lookalikeError: string | null;
+  findLookalikes: () => Promise<void>;
+
+  minScore: number;
+  setMinScore: (v: number) => void;
+  region: string;
+  setRegion: (v: string) => void;
+  picked: Record<string, boolean>;
+  togglePicked: (id: string) => void;
+
+  contactGroups: ContactGroup[];
+  contactStatus: "idle" | "loading" | "error";
+  contactError: string | null;
+  findContacts: () => Promise<void>;
+
+  emails: SequenceStep[];
+  setEmailField: (index: number, field: "subject" | "body", value: string) => void;
+
+  checks: boolean[];
+  toggleCheck: (index: number) => void;
+  launched: boolean;
+  launch: () => void;
+};
+
+const WizardContext = createContext<WizardState | null>(null);
+
+export function WizardProvider({ children }: { children: React.ReactNode }) {
+  const [seedName, setSeedName] = useState("Veldhoven Freight");
+  const [seedWebsite, setSeedWebsite] = useState("veldhoven-freight.nl");
+  const [targetTitles, setTargetTitles] = useState("");
+  const [targetDepartments, setTargetDepartments] = useState<string[]>([
+    ...BUSINESS_DEPARTMENTS,
+  ]);
+  const toggleDepartment = (d: string) =>
+    setTargetDepartments((prev) =>
+      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]
+    );
+
+  const [answers, setAnswers] = useState<Record<string, string>>(() =>
+    Object.fromEntries(CASE_QS.map((q) => [q.id, q.value]))
+  );
+  const setAnswer = (id: string, value: string) =>
+    setAnswers((prev) => ({ ...prev, [id]: value }));
+
+  const [caseStudyOptions, setCaseStudyOptions] = useState<CaseStudyOption[]>([]);
+  const [caseStudyStatus, setCaseStudyStatus] = useState<"idle" | "loading" | "error">(
+    "idle"
+  );
+  const [caseStudyError, setCaseStudyError] = useState<string | null>(null);
+  const [selectedCaseStudyUrl, setSelectedCaseStudyUrl] = useState<string | null>(null);
+
+  const findCaseStudies = async () => {
+    setCaseStudyStatus("loading");
+    setCaseStudyError(null);
+    try {
+      const res = await fetch("/api/case-studies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prospectUrl: seedWebsite }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      setCaseStudyOptions(data.caseStudies ?? []);
+      setCaseStudyStatus("idle");
+    } catch (err) {
+      setCaseStudyError(err instanceof Error ? err.message : "Search failed");
+      setCaseStudyStatus("error");
+    }
+  };
+
+  const selectCaseStudy = (cs: CaseStudyOption) => {
+    const mapped = caseStudyToAnswers(cs);
+    setAnswers((prev) => ({ ...prev, ...mapped }));
+    setSelectedCaseStudyUrl(cs.sourceUrl);
+  };
+
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [lookalikeStatus, setLookalikeStatus] = useState<"idle" | "loading" | "error">(
+    "idle"
+  );
+  const [lookalikeError, setLookalikeError] = useState<string | null>(null);
+
+  const findLookalikes = async () => {
+    setLookalikeStatus("loading");
+    setLookalikeError(null);
+    try {
+      const res = await fetch("/api/lookalikes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: seedWebsite }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      setCompanies(data.companies ?? []);
+      setPicked({});
+      setLookalikeStatus("idle");
+    } catch (err) {
+      setLookalikeError(err instanceof Error ? err.message : "Search failed");
+      setLookalikeStatus("error");
+    }
+  };
+
+  const [minScore, setMinScore] = useState(80);
+  const [region, setRegion] = useState("All");
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const togglePicked = (id: string) =>
+    setPicked((prev) => ({ ...prev, [id]: !prev[id] }));
+
+  const [contactGroups, setContactGroups] = useState<ContactGroup[]>([]);
+  const [contactStatus, setContactStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [contactError, setContactError] = useState<string | null>(null);
+
+  const findContacts = async () => {
+    setContactStatus("loading");
+    setContactError(null);
+    try {
+      const res = await fetch("/api/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companies: pickedCompanies(companies, picked).map(({ name, domain, score }) => ({
+            name,
+            domain,
+            score,
+          })),
+          departments: targetDepartments,
+          titles: targetTitles.split(",").map((t) => t.trim()).filter(Boolean),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      const groups: ContactGroup[] = data.groups ?? [];
+      setContactGroups(groups);
+      if (!groups.length) {
+        setContactError(
+          "No contacts matched those titles in India at the selected companies. Pick larger companies or broaden the target titles."
+        );
+        setContactStatus("error");
+        return;
+      }
+      setContactStatus("idle");
+      pollReveals(groups);
+    } catch (err) {
+      setContactError(err instanceof Error ? err.message : "Search failed");
+      setContactStatus("error");
+    }
+  };
+
+  // Contacts come back with email/phone still "pending" while Ocean works the
+  // async reveal in the background (see /api/contacts/reveal-webhook). Poll our
+  // own status endpoint until every pending contact resolves or we give up.
+  const pollReveals = (groups: ContactGroup[], attempt = 0) => {
+    const pendingIds = groups
+      .flatMap((g) => g.people)
+      .filter((p) => p.revealStatus === "pending" && p.id)
+      .map((p) => p.id as string);
+    if (pendingIds.length === 0 || attempt >= 15) return;
+
+    setTimeout(async () => {
+      try {
+        const res = await fetch("/api/contacts/reveal-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: pendingIds }),
+        });
+        const data = await res.json();
+        const results: Record<
+          string,
+          { status: "pending" | "revealed" | "unavailable"; email?: string; phone?: string }
+        > = data.results ?? {};
+
+        setContactGroups((prev) => {
+          const next = prev.map((g) => ({
+            ...g,
+            people: g.people.map((p) => {
+              const r = p.id ? results[p.id] : undefined;
+              if (!r || r.status === "pending") return p;
+              return {
+                ...p,
+                email: r.email || p.email,
+                phone: r.phone || p.phone,
+                conf: r.email ? ("Verified" as const) : p.conf,
+                revealStatus: undefined,
+              };
+            }),
+          }));
+          pollReveals(next, attempt + 1);
+          return next;
+        });
+      } catch {
+        pollReveals(groups, attempt + 1);
+      }
+    }, 4000);
+  };
+
+  const [emails, setEmails] = useState<SequenceStep[]>(INITIAL_SEQUENCE);
+  const setEmailField = (index: number, field: "subject" | "body", value: string) =>
+    setEmails((prev) =>
+      prev.map((e, i) => (i === index ? { ...e, [field]: value } : e))
+    );
+
+  const [checks, setChecks] = useState([false, false, false, false]);
+  const toggleCheck = (index: number) =>
+    setChecks((prev) => prev.map((v, i) => (i === index ? !v : v)));
+  const [launched, setLaunched] = useState(false);
+  const launch = () => {
+    if (checks.every(Boolean)) setLaunched(true);
+  };
+
+  return (
+    <WizardContext.Provider
+      value={{
+        seedName,
+        seedWebsite,
+        setSeedName,
+        setSeedWebsite,
+        targetTitles,
+        setTargetTitles,
+        targetDepartments,
+        toggleDepartment,
+        setTargetDepartments,
+        answers,
+        setAnswer,
+        caseStudyOptions,
+        caseStudyStatus,
+        caseStudyError,
+        selectedCaseStudyUrl,
+        findCaseStudies,
+        selectCaseStudy,
+        companies,
+        lookalikeStatus,
+        lookalikeError,
+        findLookalikes,
+        minScore,
+        setMinScore,
+        region,
+        setRegion,
+        picked,
+        togglePicked,
+        contactGroups,
+        contactStatus,
+        contactError,
+        findContacts,
+        emails,
+        setEmailField,
+        checks,
+        toggleCheck,
+        launched,
+        launch,
+      }}
+    >
+      {children}
+    </WizardContext.Provider>
+  );
+}
+
+export function useWizard() {
+  const ctx = useContext(WizardContext);
+  if (!ctx) throw new Error("useWizard must be used within a WizardProvider");
+  return ctx;
+}
+
+export function pickedCompanies(companies: Company[], picked: Record<string, boolean>) {
+  return companies.filter((c) => picked[c.id]);
+}
