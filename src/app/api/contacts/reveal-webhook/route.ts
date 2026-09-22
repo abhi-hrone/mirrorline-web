@@ -1,23 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveReveal } from "@/lib/reveal-store";
 
-// Ocean posts here once an email/phone reveal we requested in
-// /api/contacts finishes (see requestReveal() there). Exact payload field
-// names aren't confirmed against live traffic yet — Ocean's docs site
-// wouldn't render for us — so this reads a few plausible shapes rather than
-// assuming one exact schema.
+type EmailResult = { personId: string; address?: string };
+type PhoneResult = { personId: string; numbers?: string[] };
+
+// Ocean posts here twice per reveal we requested in /api/contacts (see
+// requestReveals() there) — once from the Reveal Emails webhook, once from
+// Reveal Phones — each keyed by the personId we originally submitted.
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
 
-  const id: string | undefined = body.personId ?? body.id ?? body.person?.id;
-  if (!id) return NextResponse.json({ error: "Missing person id" }, { status: 400 });
+  const emails: EmailResult[] = Array.isArray(body.emails) ? body.emails : [];
+  const phones: PhoneResult[] = Array.isArray(body.phones) ? body.phones : [];
 
-  const email: string | undefined =
-    body.email?.address ?? (typeof body.email === "string" ? body.email : undefined);
-  const phone: string | undefined =
-    body.phone?.number ?? (typeof body.phone === "string" ? body.phone : undefined);
+  for (const e of emails) {
+    if (e?.personId) resolveReveal(e.personId, { email: e.address });
+  }
+  for (const p of phones) {
+    if (p?.personId) resolveReveal(p.personId, { phone: p.numbers?.[0] });
+  }
 
-  resolveReveal(id, { email, phone });
   return NextResponse.json({ ok: true });
 }

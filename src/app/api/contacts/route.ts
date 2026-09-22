@@ -4,13 +4,15 @@ import { setPending } from "@/lib/reveal-store";
 export const maxDuration = 120;
 
 const OCEAN_SEARCH_URL = "https://api.ocean.io/v3/search/people";
-const OCEAN_ENRICH_URL = "https://api.ocean.io/v2/enrich/person";
+const OCEAN_REVEAL_EMAILS_URL = "https://api.ocean.io/v2/reveal/emails";
+const OCEAN_REVEAL_PHONES_URL = "https://api.ocean.io/v2/reveal/phones";
 const MAX_COMPANIES = 15;
 const PEOPLE_PER_COMPANY = 5;
 // Only contacts located in these countries (ISO 3166-1 alpha-2).
 const CONTACT_COUNTRIES = ["in"];
 
 type OceanPerson = {
+  id?: string;
   name?: string;
   firstName?: string;
   lastName?: string;
@@ -20,37 +22,35 @@ type OceanPerson = {
 
 type CompanyInput = { name: string; domain: string; score: number };
 
-// Kicks off an async email/phone reveal for one person via Ocean's Enrich Person
-// API. Ocean delivers the result later as a webhook POST to our own
-// /api/contacts/reveal-webhook route, so this only works once APP_BASE_URL points
-// somewhere Ocean's servers can reach (not localhost). Returns the Ocean person id
-// used to correlate that later webhook, or null if the reveal wasn't requested.
-async function requestReveal(token: string, linkedinUrl: string): Promise<string | null> {
+// Kicks off an async email/phone reveal for a batch of people via Ocean's
+// Reveal Emails/Phones APIs (personIds come from the search results above).
+// Ocean delivers results later as webhook POSTs to our own
+// /api/contacts/reveal-webhook route, so this only works once APP_BASE_URL
+// points somewhere Ocean's servers can reach (not localhost). Returns whether
+// at least one of the two reveal requests was accepted.
+async function requestReveals(token: string, personIds: string[]): Promise<boolean> {
   const base = process.env.APP_BASE_URL;
-  if (!base) return null;
+  if (!base || personIds.length === 0) return false;
 
   const webhookUrl = `${base.replace(/\/$/, "")}/api/contacts/reveal-webhook`;
+  const headers = { "Content-Type": "application/json", "x-api-token": token };
+  const body = JSON.stringify({ personIds, webhookUrl });
+
   try {
-    const res = await fetch(OCEAN_ENRICH_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-token": token },
-      body: JSON.stringify({
-        person: { linkedin: linkedinUrl },
-        revealEmails: { webhookUrl },
-        revealPhones: { webhookUrl },
-      }),
-    });
-    if (!res.ok) {
-      console.error("Ocean reveal request failed", res.status, await res.text());
-      return null;
+    const [emailRes, phoneRes] = await Promise.all([
+      fetch(OCEAN_REVEAL_EMAILS_URL, { method: "POST", headers, body }),
+      fetch(OCEAN_REVEAL_PHONES_URL, { method: "POST", headers, body }),
+    ]);
+    if (!emailRes.ok) {
+      console.error("Ocean reveal emails request failed", emailRes.status, await emailRes.text());
     }
-    const data = (await res.json()) as { id?: string };
-    if (!data.id) return null;
-    setPending(data.id);
-    return data.id;
+    if (!phoneRes.ok) {
+      console.error("Ocean reveal phones request failed", phoneRes.status, await phoneRes.text());
+    }
+    return emailRes.ok || phoneRes.ok;
   } catch (err) {
     console.error("Ocean reveal request failed", err);
-    return null;
+    return false;
   }
 }
 
@@ -138,29 +138,30 @@ export async function POST(req: NextRequest) {
         people: r.value.map((p) => ({
           name: p.name ?? [p.firstName, p.lastName].filter(Boolean).join(" "),
           title: p.jobTitle ?? "",
-          // Ocean's people search returns no emails or phones; LinkedIn is the
-          // handle, and requestReveal() below asks Ocean to fill the rest in.
+          // Ocean's people search returns no emails or phones; requestReveals()
+          // below asks Ocean to fill the rest in, keyed by this person's id.
           email: "",
           phone: "",
           linkedin: p.linkedinUrl ?? "",
           conf: "No email" as const,
-          id: null as string | null,
+          id: p.id ?? null,
           revealStatus: "unavailable" as "pending" | "unavailable",
         })),
       },
     ];
   });
 
-  const revealTargets = groups.flatMap((g) => g.people.filter((p) => p.linkedin));
-  await Promise.allSettled(
-    revealTargets.map(async (p) => {
-      const id = await requestReveal(token, p.linkedin);
-      if (id) {
-        p.id = id;
-        p.revealStatus = "pending";
-      }
-    })
+  const revealTargets = groups.flatMap((g) => g.people.filter((p) => p.id));
+  const accepted = await requestReveals(
+    token,
+    revealTargets.map((p) => p.id as string)
   );
+  if (accepted) {
+    revealTargets.forEach((p) => {
+      setPending(p.id as string);
+      p.revealStatus = "pending";
+    });
+  }
 
   return NextResponse.json({ groups, failedCompanies: failures.length });
 }

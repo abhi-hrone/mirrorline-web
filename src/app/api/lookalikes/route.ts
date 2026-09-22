@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 
 const OCEAN_URL = "https://api.ocean.io/v3/search/companies";
 const RELEVANCE_SCORE: Record<string, number> = { A: 92, B: 82, C: 72 };
+// Only companies headquartered in these countries (ISO 3166-1 alpha-2).
+const LOOKALIKE_COUNTRIES = ["in"];
 
 const REGION_BY_COUNTRY: Record<string, string> = {
   nl: "Benelux", be: "Benelux", lu: "Benelux",
@@ -48,7 +50,10 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json", "x-api-token": token },
       body: JSON.stringify({
         size: 25,
-        companiesFilters: { lookalikeDomains: [domain] },
+        companiesFilters: {
+          lookalikeDomains: [domain],
+          primaryLocations: { includeCountries: LOOKALIKE_COUNTRIES },
+        },
       }),
     });
 
