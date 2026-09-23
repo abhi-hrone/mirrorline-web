@@ -203,7 +203,9 @@ export type SequenceStep = {
   step: string;
   day: string;
   subject: string;
-  body: string;
+  hook: string;
+  content: string;
+  cta: string;
   sources: string[];
   state: "Drafted" | "Needs edit";
 };
@@ -218,7 +220,9 @@ export const INITIAL_SEQUENCE: SequenceStep[] = [
     step: "Step 1",
     day: "Day 0",
     subject: "Veldhoven cut dock-to-invoice from 9 days to 2",
-    body: "Katrin — we spent this spring inside Veldhoven Freight, a Dutch broker about your size running the same legacy TMS most of the market is still on.\n\nTheir dock-to-invoice cycle was nine days. It is two now. The work was unglamorous: migrating 14,000 historic loads, building a carrier scorecard, wiring two EDI partners.\n\nWorth 20 minutes to compare notes on where your cycle actually stalls?",
+    hook: "{{firstName}} — we spent this spring inside Veldhoven Freight, a Dutch broker running the same legacy TMS most of the market is still on.",
+    content: "Their dock-to-invoice cycle was nine days. It is two now. The work was unglamorous: migrating 14,000 historic loads, building a carrier scorecard, wiring two EDI partners.",
+    cta: "Worth 20 minutes to compare notes on where {{company}}'s cycle actually stalls?",
     sources: ["Headline number", "What we configured"],
     state: "Drafted",
   },
@@ -226,7 +230,9 @@ export const INITIAL_SEQUENCE: SequenceStep[] = [
     step: "Step 2",
     day: "Day 3",
     subject: "The part that took three weeks longer",
-    body: "One thing I left out: Veldhoven's EDI mapping for a single partner ran three weeks past plan. We kept that lane manual in parallel so nothing stalled.\n\nI mention it because every broker I talk to has one partner that will not behave. Which is yours?",
+    hook: "One thing I left out last time: Veldhoven's EDI mapping for a single partner ran three weeks past plan.",
+    content: "We kept that lane manual in parallel so nothing stalled.",
+    cta: "I mention it because every broker I talk to has one partner that will not behave — which is yours?",
     sources: ["What went wrong"],
     state: "Drafted",
   },
@@ -234,7 +240,9 @@ export const INITIAL_SEQUENCE: SequenceStep[] = [
     step: "Step 3",
     day: "Day 7",
     subject: "Anneke de Vries, COO",
-    body: '"We stopped chasing paperwork and started chasing margin. Two weeks in, my team asked why we waited."\n\nThat is Veldhoven\'s COO, six months after go-live. Happy to put you two on a call instead of hearing it from me.',
+    hook: '"We stopped chasing paperwork and started chasing margin. Two weeks in, my team asked why we waited."',
+    content: "That is Veldhoven's COO, six months after go-live.",
+    cta: "Happy to put you two on a call instead of hearing it from me — worth a short intro?",
     sources: ["Approved quote", "Quotable contact"],
     state: "Drafted",
   },
@@ -242,7 +250,9 @@ export const INITIAL_SEQUENCE: SequenceStep[] = [
     step: "Step 4",
     day: "Day 14",
     subject: "Closing the loop",
-    body: "I will stop here. If the nine-days-to-two story is interesting later in the year, the door is open — and I can still arrange the Veldhoven intro.\n\nEither way, good luck with peak season.",
+    hook: "I will stop here, {{firstName}}.",
+    content: "If the nine-days-to-two story is interesting for {{company}} later in the year, the door is open — and I can still arrange the Veldhoven intro.",
+    cta: "Worth staying in touch, or should I close the loop for now?",
     sources: ["Headline number"],
     state: "Needs edit",
   },

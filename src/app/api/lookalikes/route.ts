@@ -6,6 +6,15 @@ const OCEAN_URL = "https://api.ocean.io/v3/search/companies";
 const RELEVANCE_SCORE: Record<string, number> = { A: 92, B: 82, C: 72 };
 // Only companies headquartered in these countries (ISO 3166-1 alpha-2).
 const LOOKALIKE_COUNTRIES = ["in"];
+const COMPANY_SIZES = [
+    "201-500",
+    "501-1000",
+    "1001-5000",
+    "5001-10000",
+    "10001-50000",
+    "50001-100000",
+    "500000+"
+]
 
 const REGION_BY_COUNTRY: Record<string, string> = {
   nl: "Benelux", be: "Benelux", lu: "Benelux",
@@ -54,6 +63,7 @@ export async function POST(req: NextRequest) {
         companiesFilters: {
           lookalikeDomains: [domain],
           primaryLocations: { includeCountries: LOOKALIKE_COUNTRIES },
+          companySizes: COMPANY_SIZES,
         },
       }),
     });

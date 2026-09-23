@@ -6,7 +6,6 @@ import {
   CASE_QS,
   Company,
   ContactGroup,
-  INITIAL_SEQUENCE,
   SequenceStep,
   CaseStudyOption,
   caseStudyToAnswers,
@@ -51,7 +50,14 @@ type WizardState = {
   findContacts: () => Promise<void>;
 
   emails: SequenceStep[];
-  setEmailField: (index: number, field: "subject" | "body", value: string) => void;
+  setEmailField: (
+    index: number,
+    field: "subject" | "hook" | "content" | "cta",
+    value: string
+  ) => void;
+  sequenceStatus: "idle" | "loading" | "error";
+  sequenceError: string | null;
+  generateSequence: () => Promise<void>;
 
   checks: boolean[];
   toggleCheck: (index: number) => void;
@@ -255,11 +261,44 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     }, 4000);
   };
 
-  const [emails, setEmails] = useState<SequenceStep[]>(INITIAL_SEQUENCE);
-  const setEmailField = (index: number, field: "subject" | "body", value: string) =>
+  const [emails, setEmails] = useState<SequenceStep[]>([]);
+  const setEmailField = (
+    index: number,
+    field: "subject" | "hook" | "content" | "cta",
+    value: string
+  ) =>
     setEmails((prev) =>
       prev.map((e, i) => (i === index ? { ...e, [field]: value } : e))
     );
+
+  const [sequenceStatus, setSequenceStatus] = useState<"idle" | "loading" | "error">(
+    "idle"
+  );
+  const [sequenceError, setSequenceError] = useState<string | null>(null);
+
+  const generateSequence = async () => {
+    setSequenceStatus("loading");
+    setSequenceError(null);
+    try {
+      const res = await fetch("/api/sequence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          seedName,
+          answers,
+          targetTitles,
+          targetDepartments,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Sequence generation failed");
+      setEmails(data.steps ?? []);
+      setSequenceStatus("idle");
+    } catch (err) {
+      setSequenceError(err instanceof Error ? err.message : "Sequence generation failed");
+      setSequenceStatus("error");
+    }
+  };
 
   const [checks, setChecks] = useState([false, false, false, false]);
   const toggleCheck = (index: number) =>
@@ -305,6 +344,9 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         findContacts,
         emails,
         setEmailField,
+        sequenceStatus,
+        sequenceError,
+        generateSequence,
         checks,
         toggleCheck,
         launched,
