@@ -3,7 +3,9 @@ import { normalizeDomain } from "@/lib/domain";
 import { getCachedLookalikes, saveLookalikes } from "@/lib/research-cache";
 
 const OCEAN_URL = "https://api.ocean.io/v3/search/companies";
+
 const RELEVANCE_SCORE: Record<string, number> = { A: 92, B: 82, C: 72 };
+const RETURNED_COMPANIES_LIMIT = 100;
 // Only companies headquartered in these countries (ISO 3166-1 alpha-2).
 const LOOKALIKE_COUNTRIES = ["in"];
 const COMPANY_SIZES = [
@@ -59,7 +61,7 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-token": token },
       body: JSON.stringify({
-        size: 25,
+        size: RETURNED_COMPANIES_LIMIT,
         companiesFilters: {
           lookalikeDomains: [domain],
           primaryLocations: { includeCountries: LOOKALIKE_COUNTRIES },

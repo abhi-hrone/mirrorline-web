@@ -22,11 +22,28 @@ function ReviewContent() {
   // instead of asking to re-approve something already live.
   const isExisting = existingStatus === "Sending" || existingStatus === "In review";
 
-  const { seedName, checks, toggleCheck, launched, launch, picked, emails, companies } =
-    useWizard();
+  const {
+    seedName,
+    checks,
+    toggleCheck,
+    launched,
+    launchStatus,
+    launchError,
+    smartleadCampaignUrl,
+    leadsSent,
+    sendingStarted,
+    launch,
+    picked,
+    emails,
+    companies,
+    contactGroups,
+  } = useWizard();
   const allChecked = isExisting || checks.every(Boolean);
   const remaining = checks.filter((v) => !v).length;
   const companyCount = pickedCompanies(companies, picked).length;
+  const revealedContacts = contactGroups
+    .flatMap((g) => g.people)
+    .filter((p) => p.email).length;
   const campaignTitle = `${seedName.split(" ")[0]} × freight brokers, EU`;
 
   if (launched) {
@@ -35,22 +52,25 @@ function ReviewContent() {
         <div className="max-w-[860px] flex flex-col gap-[18px]">
           <div className="rounded-xl bg-ink p-6 text-paper sm:p-11">
             <div className="font-mono text-[10.5px] tracking-[0.14em] text-accent uppercase">
-              Scheduled
+              {sendingStarted ? "Sending" : "Pushed to Smartlead"}
             </div>
             <h2 className="mt-[14px] mb-3 font-serif text-[clamp(28px,3.6vw,40px)] leading-[1.1]">
-              First send goes out Tuesday, 08:00 CET.
+              {sendingStarted
+                ? "Sending started in Smartlead."
+                : "Campaign created as a draft in Smartlead."}
             </h2>
             <p className="mb-[26px] max-w-[520px] text-[14.5px] leading-relaxed text-[#B5B0A1]">
-              {companyCount} companies, 96 contacts, {emails.length} steps.
-              Replies land in the shared inbox. Marcus and Priya are credited
-              on anything that converts.
+              {companyCount} companies, {leadsSent} contacts, {emails.length}{" "}
+              steps loaded.{" "}
+              {sendingStarted
+                ? "A connected sender mailbox was assigned automatically and the campaign is now live."
+                : "No mailbox is connected in Smartlead yet, so it couldn't start automatically — head there to schedule and manage sending."}
             </p>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-[18px] border-t border-[#332F22] pt-[22px]">
               {[
                 { k: "Companies", v: String(companyCount) },
-                { k: "Contacts", v: "96" },
+                { k: "Contacts", v: String(leadsSent) },
                 { k: "Steps", v: String(emails.length) },
-                { k: "Window", v: "14 days" },
               ].map((stat) => (
                 <div key={stat.k}>
                   <div className="font-mono text-[9.5px] tracking-[0.11em] text-muted uppercase">
@@ -62,12 +82,24 @@ function ReviewContent() {
                 </div>
               ))}
             </div>
-            <Link
-              href="/campaigns"
-              className="mt-7 inline-block cursor-pointer rounded-md bg-paper px-[22px] py-3 text-sm font-semibold text-ink"
-            >
-              Back to campaigns
-            </Link>
+            <div className="mt-7 flex flex-wrap gap-3">
+              {smartleadCampaignUrl && (
+                <a
+                  href={smartleadCampaignUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block cursor-pointer rounded-md bg-accent px-[22px] py-3 text-sm font-semibold text-ink"
+                >
+                  Open in Smartlead
+                </a>
+              )}
+              <Link
+                href="/campaigns"
+                className="inline-block cursor-pointer rounded-md bg-paper px-[22px] py-3 text-sm font-semibold text-ink"
+              >
+                Back to campaigns
+              </Link>
+            </div>
           </div>
         </div>
       </div>
@@ -122,9 +154,8 @@ function ReviewContent() {
         <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-3.5">
           {[
             { k: "Companies", v: String(companyCount) },
-            { k: "Contacts", v: "96" },
+            { k: "Contacts", v: String(revealedContacts) },
             { k: "Steps", v: String(emails.length) },
-            { k: "Window", v: "14 days" },
           ].map((stat) => (
             <div
               key={stat.k}
@@ -157,17 +188,21 @@ function ReviewContent() {
           <div className="flex flex-wrap items-center gap-4">
             <button
               onClick={launch}
-              disabled={!allChecked}
+              disabled={!allChecked || launchStatus === "loading"}
               className={`rounded-md px-[26px] py-[13px] text-[14.5px] font-semibold text-paper ${
-                allChecked ? "cursor-pointer bg-teal" : "cursor-not-allowed bg-[#B8B2A0]"
+                allChecked && launchStatus !== "loading"
+                  ? "cursor-pointer bg-teal"
+                  : "cursor-not-allowed bg-[#B8B2A0]"
               }`}
             >
-              Approve & schedule
+              {launchStatus === "loading" ? "Pushing to Smartlead…" : "Approve & push to Smartlead"}
             </button>
             <span className="text-[12.5px] text-muted">
-              {allChecked
-                ? "All clear. Sending starts Tuesday 08:00 CET."
-                : `${remaining} checks remaining`}
+              {launchStatus === "error"
+                ? launchError
+                : allChecked
+                  ? "Creates a draft Smartlead campaign with the sequence and revealed contacts."
+                  : `${remaining} checks remaining`}
             </span>
           </div>
         )}

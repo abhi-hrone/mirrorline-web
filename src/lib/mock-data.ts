@@ -299,10 +299,10 @@ export const INTEGRATIONS: {
     key: "fm_··· 4c07",
   },
   {
-    name: "Sending tool",
-    role: "Not chosen yet. Sequences export as CSV meanwhile.",
-    state: "Pending",
-    key: "—",
+    name: "Smartlead",
+    role: "Sends the approved sequence — pushes contacts and steps into a Smartlead campaign draft.",
+    state: "Connected",
+    key: "sl_··· 91c4",
   },
 ];
 

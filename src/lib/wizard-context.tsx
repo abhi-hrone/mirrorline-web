@@ -48,6 +48,11 @@ type WizardState = {
   contactStatus: "idle" | "loading" | "error";
   contactError: string | null;
   findContacts: () => Promise<void>;
+  removeContact: (domain: string, index: number) => void;
+  addContact: (
+    domain: string,
+    person: { name: string; title: string; email: string; phone?: string; linkedin?: string }
+  ) => void;
 
   emails: SequenceStep[];
   setEmailField: (
@@ -62,14 +67,19 @@ type WizardState = {
   checks: boolean[];
   toggleCheck: (index: number) => void;
   launched: boolean;
-  launch: () => void;
+  launchStatus: "idle" | "loading" | "error";
+  launchError: string | null;
+  smartleadCampaignUrl: string | null;
+  leadsSent: number;
+  sendingStarted: boolean;
+  launch: () => Promise<void>;
 };
 
 const WizardContext = createContext<WizardState | null>(null);
 
 export function WizardProvider({ children }: { children: React.ReactNode }) {
-  const [seedName, setSeedName] = useState("Veldhoven Freight");
-  const [seedWebsite, setSeedWebsite] = useState("veldhoven-freight.nl");
+  const [seedName, setSeedName] = useState("Salesforce");
+  const [seedWebsite, setSeedWebsite] = useState("www.salesforce.com");
   const [targetTitles, setTargetTitles] = useState("");
   const [targetDepartments, setTargetDepartments] = useState<string[]>([
     ...BUSINESS_DEPARTMENTS,
@@ -261,6 +271,27 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     }, 4000);
   };
 
+  // Lets a reviewer drop a bad match or add someone Ocean missed before the
+  // list goes to Smartlead — pure client-side edit, no API call involved.
+  const removeContact = (domain: string, index: number) =>
+    setContactGroups((prev) =>
+      prev.map((g) =>
+        g.domain === domain ? { ...g, people: g.people.filter((_, i) => i !== index) } : g
+      )
+    );
+
+  const addContact = (
+    domain: string,
+    person: { name: string; title: string; email: string; phone?: string; linkedin?: string }
+  ) =>
+    setContactGroups((prev) =>
+      prev.map((g) =>
+        g.domain === domain
+          ? { ...g, people: [...g.people, { ...person, conf: "Verified" as const }] }
+          : g
+      )
+    );
+
   const [emails, setEmails] = useState<SequenceStep[]>([]);
   const setEmailField = (
     index: number,
@@ -304,8 +335,57 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   const toggleCheck = (index: number) =>
     setChecks((prev) => prev.map((v, i) => (i === index ? !v : v)));
   const [launched, setLaunched] = useState(false);
-  const launch = () => {
-    if (checks.every(Boolean)) setLaunched(true);
+  const [launchStatus, setLaunchStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [smartleadCampaignUrl, setSmartleadCampaignUrl] = useState<string | null>(null);
+  const [leadsSent, setLeadsSent] = useState(0);
+  const [sendingStarted, setSendingStarted] = useState(false);
+
+  // Pushes the approved sequence + revealed contacts into a real Smartlead
+  // campaign. If a mailbox is already connected in Smartlead (one-time setup
+  // done in their dashboard), the API route assigns it, sets a default
+  // schedule, and starts sending immediately. Otherwise the campaign lands
+  // as a draft for a human to assign a sender and start manually.
+  const launch = async () => {
+    if (!checks.every(Boolean)) return;
+    setLaunchStatus("loading");
+    setLaunchError(null);
+    try {
+      const res = await fetch("/api/smartlead/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          campaignName: `${seedName.split(" ")[0]} × freight brokers, EU`,
+          steps: emails.map(({ day, subject, hook, content, cta }) => ({
+            day,
+            subject,
+            hook,
+            content,
+            cta,
+          })),
+          groups: contactGroups.map(({ company, domain, people }) => ({
+            company,
+            domain,
+            people: people.map(({ name, title, email, phone }) => ({
+              name,
+              title,
+              email,
+              phone,
+            })),
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Smartlead launch failed");
+      setSmartleadCampaignUrl(data.campaignUrl ?? null);
+      setLeadsSent(data.leadsAdded ?? 0);
+      setSendingStarted(!!data.started);
+      setLaunchStatus("idle");
+      setLaunched(true);
+    } catch (err) {
+      setLaunchError(err instanceof Error ? err.message : "Smartlead launch failed");
+      setLaunchStatus("error");
+    }
   };
 
   return (
@@ -342,6 +422,8 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         contactStatus,
         contactError,
         findContacts,
+        removeContact,
+        addContact,
         emails,
         setEmailField,
         sequenceStatus,
@@ -350,6 +432,11 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         checks,
         toggleCheck,
         launched,
+        launchStatus,
+        launchError,
+        smartleadCampaignUrl,
+        leadsSent,
+        sendingStarted,
         launch,
       }}
     >

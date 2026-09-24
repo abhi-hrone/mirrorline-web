@@ -1,12 +1,21 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { CONTACT_CONFIDENCE_STYLES } from "@/lib/mock-data";
 import { pickedCompanies, useWizard } from "@/lib/wizard-context";
 
 export default function ContactsPage() {
-  const { contactGroups, contactStatus, contactError, findContacts, companies, picked } =
-    useWizard();
+  const {
+    contactGroups,
+    contactStatus,
+    contactError,
+    findContacts,
+    removeContact,
+    addContact,
+    companies,
+    picked,
+  } = useWizard();
   const pickedCount = pickedCompanies(companies, picked).length;
   const totalContacts = contactGroups.reduce((n, g) => n + g.people.length, 0);
 
@@ -58,10 +67,10 @@ export default function ContactsPage() {
               </span>
             </div>
 
-            {group.people.map((p) => (
+            {group.people.map((p, i) => (
               <div
-                key={`${p.name}-${p.email}`}
-                className="grid grid-cols-[minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,0.85fr)_60px_82px] items-center gap-3.5 border-b border-[#F0EBE0] px-5 py-3"
+                key={`${p.name}-${p.email}-${i}`}
+                className="grid grid-cols-[minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,0.85fr)_60px_82px_28px] items-center gap-3.5 border-b border-[#F0EBE0] px-5 py-3"
               >
                 <span className="min-w-0 overflow-hidden text-ellipsis text-[13.5px] font-semibold">
                   {p.name}
@@ -89,8 +98,17 @@ export default function ContactsPage() {
                 >
                   {p.conf}
                 </span>
+                <button
+                  onClick={() => removeContact(group.domain, i)}
+                  title={`Remove ${p.name}`}
+                  className="cursor-pointer justify-self-end rounded-md px-1.5 py-1 text-[13px] text-[#9C978A] hover:bg-[#F0EBE0] hover:text-[#B3402A]"
+                >
+                  ×
+                </button>
               </div>
             ))}
+
+            <AddContactRow domain={group.domain} onAdd={addContact} />
           </div>
         ))}
 
@@ -101,6 +119,97 @@ export default function ContactsPage() {
           Draft sequence
         </Link>
       </div>
+    </div>
+  );
+}
+
+function AddContactRow({
+  domain,
+  onAdd,
+}: {
+  domain: string;
+  onAdd: (
+    domain: string,
+    person: { name: string; title: string; email: string; phone?: string; linkedin?: string }
+  ) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+
+  const reset = () => {
+    setName("");
+    setTitle("");
+    setEmail("");
+    setPhone("");
+    setOpen(false);
+  };
+
+  const submit = () => {
+    if (!name.trim() || !email.trim()) return;
+    onAdd(domain, {
+      name: name.trim(),
+      title: title.trim(),
+      email: email.trim(),
+      phone: phone.trim() || undefined,
+    });
+    reset();
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full cursor-pointer px-5 py-2.5 text-left text-[12.5px] font-medium text-teal hover:bg-[#F7F4EC]"
+      >
+        + Add contact manually
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2.5 border-t border-[#F0EBE0] bg-[#FBF9F3] px-5 py-3">
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Name"
+        className="min-w-0 flex-1 rounded-md border border-line bg-white px-2.5 py-1.5 text-[13px]"
+      />
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Title"
+        className="min-w-0 flex-1 rounded-md border border-line bg-white px-2.5 py-1.5 text-[13px]"
+      />
+      <input
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="Email"
+        type="email"
+        className="min-w-0 flex-1 rounded-md border border-line bg-white px-2.5 py-1.5 text-[13px]"
+      />
+      <input
+        value={phone}
+        onChange={(e) => setPhone(e.target.value)}
+        placeholder="Phone (optional)"
+        className="min-w-0 flex-1 rounded-md border border-line bg-white px-2.5 py-1.5 text-[13px]"
+      />
+      <button
+        onClick={submit}
+        disabled={!name.trim() || !email.trim()}
+        className="cursor-pointer rounded-md bg-teal px-3.5 py-1.5 text-[12.5px] font-semibold text-paper disabled:opacity-50"
+      >
+        Add
+      </button>
+      <button
+        onClick={reset}
+        className="cursor-pointer rounded-md px-3 py-1.5 text-[12.5px] text-[#6E6A5C]"
+      >
+        Cancel
+      </button>
     </div>
   );
 }
