@@ -53,6 +53,25 @@ function parseDay(day: string) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// Smartlead's days_of_the_week uses JS's Sun=0..Sat=6 numbering.
+function currentIstWeekday(): number {
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const short = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", weekday: "short" });
+  return map[short] ?? new Date().getDay();
+}
+
+// Base B2B window is Tue-Thu, but a campaign launched on another weekday
+// (e.g. Friday) would otherwise sit idle with "Next Email In: N/A" until the
+// following Tuesday — so fold today in if it's a business day.
+function sendDaysForLaunch(): number[] {
+  const base = [2, 3, 4];
+  const today = currentIstWeekday();
+  if (today >= 1 && today <= 5 && !base.includes(today)) {
+    return [...base, today].sort((a, b) => a - b);
+  }
+  return base;
+}
+
 // The generator writes "Day 0 / 3 / 7 / 12" — days since the first email.
 // Smartlead wants the gap since the previous step, so take the difference.
 function toStepDelays(steps: StepIn[]) {
@@ -208,8 +227,9 @@ export async function POST(req: NextRequest) {
           );
         } else {
           // Default sending window: Tuesday to Thursday, 10 AM to 5 PM IST —
-          // the B2B window that works best for Indian recipients. There's no
-          // UI yet to configure this per campaign.
+          // the B2B window that works best for Indian recipients — plus
+          // today if launching on some other weekday (see sendDaysForLaunch).
+          // There's no UI yet to configure this per campaign.
           const scheduleRes = await fetch(
             smartleadUrl(`/campaigns/${campaignId}/schedule`, apiKey),
             {
@@ -217,7 +237,7 @@ export async function POST(req: NextRequest) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 timezone: "Asia/Kolkata",
-                days_of_the_week: [2, 3, 4],
+                days_of_the_week: sendDaysForLaunch(),
                 start_hour: "10:00",
                 end_hour: "17:00",
                 min_time_btw_emails: 15,

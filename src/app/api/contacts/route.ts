@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setPending } from "@/lib/reveal-store";
-import { getCachedContacts, saveContacts, getCachedReveals } from "@/lib/research-cache";
+import { getCachedContacts, saveContacts, getCachedReveals, saveReveal } from "@/lib/research-cache";
+import { apolloRevealEmail, apolloSearchPeople, toApolloLocations } from "@/lib/apollo";
 
 export const maxDuration = 120;
 
@@ -66,18 +67,12 @@ async function requestReveals(token: string, personIds: string[]): Promise<boole
   }
 }
 
-async function searchPeople(
+async function oceanSearchPeople(
   token: string,
   domain: string,
   titles: string[],
   departments: string[]
-) {
-  const cached = await getCachedContacts(domain, titles, departments).catch((err) => {
-    console.error("Contacts cache lookup failed", err);
-    return null;
-  });
-  if (cached) return cached as OceanPerson[];
-
+): Promise<OceanPerson[]> {
   const res = await fetch(OCEAN_SEARCH_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-token": token },
@@ -96,7 +91,61 @@ async function searchPeople(
     throw new Error(`Ocean returned ${res.status}: ${await res.text()}`);
   }
   const data = (await res.json()) as { people?: OceanPerson[] };
-  const people = data.people ?? [];
+  return data.people ?? [];
+}
+
+// Apollo has no equivalent to Ocean's `departments` enum (see
+// src/lib/departments.ts), so a department-only search (no titles) can't be
+// narrowed the same way on this fallback path — it comes back broader.
+async function apolloSearchPeopleForDomain(
+  key: string,
+  domain: string,
+  titles: string[]
+): Promise<OceanPerson[]> {
+  const people = await apolloSearchPeople(
+    key,
+    domain,
+    titles,
+    toApolloLocations(CONTACT_COUNTRIES),
+    PEOPLE_PER_COMPANY
+  );
+  return people.map((p) => ({
+    id: p.id,
+    name: p.name ?? [p.first_name, p.last_name].filter(Boolean).join(" "),
+    firstName: p.first_name,
+    lastName: p.last_name,
+    jobTitle: p.title,
+    linkedinUrl: p.linkedin_url,
+  }));
+}
+
+async function searchPeople(
+  oceanToken: string | undefined,
+  apolloKey: string | undefined,
+  domain: string,
+  titles: string[],
+  departments: string[]
+): Promise<OceanPerson[]> {
+  const cached = await getCachedContacts(domain, titles, departments).catch((err) => {
+    console.error("Contacts cache lookup failed", err);
+    return null;
+  });
+  if (cached) return cached as OceanPerson[];
+
+  let people: OceanPerson[];
+  if (oceanToken) {
+    try {
+      people = await oceanSearchPeople(oceanToken, domain, titles, departments);
+    } catch (err) {
+      console.error("Ocean people search failed, falling back to Apollo", domain, err);
+      if (!apolloKey) throw err;
+      people = await apolloSearchPeopleForDomain(apolloKey, domain, titles);
+    }
+  } else if (apolloKey) {
+    people = await apolloSearchPeopleForDomain(apolloKey, domain, titles);
+  } else {
+    throw new Error("Neither OCEAN_API_TOKEN nor APOLLO_API_KEY is set on the server.");
+  }
 
   await saveContacts(domain, titles, departments, people).catch((err) =>
     console.error("Contacts cache save failed", err)
@@ -106,10 +155,11 @@ async function searchPeople(
 }
 
 export async function POST(req: NextRequest) {
-  const token = process.env.OCEAN_API_TOKEN;
-  if (!token) {
+  const oceanToken = process.env.OCEAN_API_TOKEN;
+  const apolloKey = process.env.APOLLO_API_KEY;
+  if (!oceanToken && !apolloKey) {
     return NextResponse.json(
-      { error: "OCEAN_API_TOKEN is not set on the server." },
+      { error: "Neither OCEAN_API_TOKEN nor APOLLO_API_KEY is set on the server." },
       { status: 500 }
     );
   }
@@ -136,19 +186,19 @@ export async function POST(req: NextRequest) {
   }
 
   const results = await Promise.allSettled(
-    companies.map((c) => searchPeople(token, c.domain, titles, departments))
+    companies.map((c) => searchPeople(oceanToken, apolloKey, c.domain, titles, departments))
   );
 
   const failures = results.filter((r) => r.status === "rejected");
   if (failures.length === results.length) {
-    console.error("Ocean people search failed", (failures[0] as PromiseRejectedResult).reason);
+    console.error("People search failed on all companies", (failures[0] as PromiseRejectedResult).reason);
     return NextResponse.json(
-      { error: "Ocean people search failed. Check server logs." },
+      { error: "People search failed. Check server logs." },
       { status: 502 }
     );
   }
   failures.forEach((f) =>
-    console.error("Ocean people search failed for a company", (f as PromiseRejectedResult).reason)
+    console.error("People search failed for a company", (f as PromiseRejectedResult).reason)
   );
 
   const groups = companies.flatMap((c, i) => {
@@ -175,9 +225,11 @@ export async function POST(req: NextRequest) {
     ];
   });
 
-  const revealTargets = groups.flatMap((g) => g.people.filter((p) => p.id));
+  const revealTargets = groups.flatMap((g) =>
+    g.people.filter((p) => p.id).map((p) => ({ person: p, domain: g.domain }))
+  );
 
-  const cachedReveals = await getCachedReveals(revealTargets.map((p) => p.id as string)).catch(
+  const cachedReveals = await getCachedReveals(revealTargets.map((t) => t.person.id as string)).catch(
     (err) => {
       console.error("Reveal cache lookup failed", err);
       return new Map<string, { status: string; email?: string; phone?: string }>();
@@ -185,9 +237,9 @@ export async function POST(req: NextRequest) {
   );
 
   // A cached "revealed" contact already has its final email/phone from a
-  // prior run — reuse it instead of spending another Ocean reveal credit.
+  // prior run — reuse it instead of spending another reveal credit.
   // Anything not fully revealed yet (or never requested) gets a fresh ask.
-  const toRequest = revealTargets.filter((p) => {
+  const toRequest = revealTargets.filter(({ person: p }) => {
     const cached = cachedReveals.get(p.id as string);
     if (!cached || cached.status !== "revealed") return true;
     p.email = cached.email ?? "";
@@ -197,15 +249,50 @@ export async function POST(req: NextRequest) {
     return false;
   });
 
-  const accepted = await requestReveals(
-    token,
-    toRequest.map((p) => p.id as string)
-  );
+  const accepted = oceanToken
+    ? await requestReveals(
+        oceanToken,
+        toRequest.map((t) => t.person.id as string)
+      )
+    : false;
+
   if (accepted) {
-    toRequest.forEach((p) => {
+    toRequest.forEach(({ person: p }) => {
       setPending(p.id as string);
       p.revealStatus = "pending";
     });
+  } else if (apolloKey) {
+    // Ocean's reveal request itself failed (or Ocean isn't configured) —
+    // fall back to Apollo's synchronous email match per person. Apollo can
+    // reveal phone numbers too, but only via its own async webhook, which
+    // isn't wired up here to keep this fallback simple, so phone stays
+    // unrevealed on this path.
+    await Promise.all(
+      toRequest.map(async ({ person: p, domain }) => {
+        p.revealStatus = "unavailable";
+        const [firstName, ...rest] = p.name.trim().split(/\s+/);
+        try {
+          const { email } = await apolloRevealEmail(apolloKey, {
+            first_name: firstName,
+            last_name: rest.join(" "),
+            domain,
+            linkedin_url: p.linkedin || undefined,
+          });
+          if (email) {
+            p.email = email;
+            p.conf = "Verified";
+            await saveReveal(p.id as string, {
+              status: "revealed",
+              email,
+              emailDone: true,
+              phoneDone: false,
+            }).catch((err) => console.error("Apollo reveal cache save failed", err));
+          }
+        } catch (err) {
+          console.error("Apollo reveal fallback failed for", p.id, err);
+        }
+      })
+    );
   }
 
   return NextResponse.json({ groups, failedCompanies: failures.length });
