@@ -74,12 +74,17 @@ export default function CaseStudyPage() {
                         {selected ? "Selected — reapply" : "Use this case study"}
                       </button>
                     </div>
-                    {cs.headlineNumber && (
-                      <p className="text-[13px] font-semibold text-teal">{cs.headlineNumber}</p>
+                    {cs.benefits && (
+                      <p className="text-[13px] font-semibold text-teal">{cs.benefits}</p>
                     )}
-                    {cs.whatWeDelivered && (
+                    {(cs.industry || cs.headcount || cs.locations) && (
+                      <p className="text-[12px] text-muted">
+                        {[cs.industry, cs.headcount, cs.locations].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                    {cs.solution && (
                       <p className="text-[12.5px] leading-relaxed text-[#4A4636]">
-                        {cs.whatWeDelivered}
+                        {cs.solution}
                       </p>
                     )}
                     {cs.sourceUrl && (

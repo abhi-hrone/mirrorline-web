@@ -49,6 +49,11 @@ export default function SequencePage() {
               <span className="font-mono text-[10.5px] text-muted">
                 {email.day}
               </span>
+              {email.framework && (
+                <span className="rounded-full border border-[#E5DAC0] bg-[#F2EDDF] px-[9px] py-[2px] font-mono text-[9.5px] tracking-[0.09em] text-[#7A5B27] uppercase">
+                  {email.framework}
+                </span>
+              )}
               <span
                 className={`ml-auto rounded-full px-2 py-[3px] font-mono text-[9.5px] tracking-[0.09em] uppercase ${SEQUENCE_STYLES[email.state]}`}
               >
@@ -64,6 +69,16 @@ export default function SequencePage() {
                   value={email.subject}
                   onChange={(e) => setEmailField(i, "subject", e.target.value)}
                   className="rounded-md border border-line bg-paper px-3 py-2.5 text-sm font-medium"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="font-mono text-[9.5px] tracking-[0.11em] text-[#A39D8C] uppercase">
+                  Preheader
+                </span>
+                <input
+                  value={email.preheader}
+                  onChange={(e) => setEmailField(i, "preheader", e.target.value)}
+                  className="rounded-md border border-line bg-paper px-3 py-2.5 text-sm"
                 />
               </label>
               <label className="flex flex-col gap-1.5">
@@ -96,6 +111,18 @@ export default function SequencePage() {
                   rows={2}
                   value={email.cta}
                   onChange={(e) => setEmailField(i, "cta", e.target.value)}
+                  className="rounded-md border border-line bg-paper p-3 text-sm leading-relaxed"
+                />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="font-mono text-[9.5px] tracking-[0.11em] text-[#A39D8C] uppercase">
+                  P.S.
+                </span>
+                <textarea
+                  rows={2}
+                  value={email.ps}
+                  onChange={(e) => setEmailField(i, "ps", e.target.value)}
+                  placeholder="Optional — restate the offer or the proof in one line"
                   className="rounded-md border border-line bg-paper p-3 text-sm leading-relaxed"
                 />
               </label>

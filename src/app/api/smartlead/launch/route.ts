@@ -4,7 +4,15 @@ export const maxDuration = 60;
 
 const SMARTLEAD_BASE_URL = "https://server.smartlead.ai/api/v1";
 
-type StepIn = { day: string; subject: string; hook: string; content: string; cta: string };
+type StepIn = {
+  day: string;
+  subject: string;
+  preheader: string;
+  hook: string;
+  content: string;
+  cta: string;
+  ps: string;
+};
 type PersonIn = { name: string; title: string; email: string; phone?: string };
 type GroupIn = { company: string; domain: string; people: PersonIn[] };
 
@@ -24,20 +32,32 @@ function toSmartleadTokens(text: string) {
 }
 
 function toEmailBody(step: StepIn) {
-  const paragraphs = [step.hook, step.content, step.cta]
+  const paragraphs = [step.hook, step.content, step.cta, step.ps && `P.S. ${step.ps}`]
     .filter(Boolean)
-    .map((p) => `<p>${toSmartleadTokens(p)}</p>`)
+    .map((p) => `<p>${toSmartleadTokens(p as string)}</p>`)
     .join("");
   // The generator deliberately keeps "hook" specific rather than a greeting
   // (see /api/sequence's system prompt), so every email reads as a template
   // with no salutation at all — prepend a plain "Hi {{first_name}}," here,
   // guaranteed regardless of what the model drafted.
-  return `<p>Hi {{first_name}},</p>${paragraphs}`;
+  // The preheader rides as a hidden first line so inboxes show it as the
+  // preview text instead of repeating the opening sentence.
+  const preheader = step.preheader
+    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${toSmartleadTokens(step.preheader)}</div>`
+    : "";
+  return `${preheader}<p>Hi {{first_name}},</p>${paragraphs}`;
 }
 
-function parseDelayDays(day: string) {
+function parseDay(day: string) {
   const n = parseInt(day.replace(/[^0-9]/g, ""), 10);
   return Number.isFinite(n) ? n : 0;
+}
+
+// The generator writes "Day 0 / 3 / 7 / 12" — days since the first email.
+// Smartlead wants the gap since the previous step, so take the difference.
+function toStepDelays(steps: StepIn[]) {
+  const days = steps.map((s) => parseDay(s.day));
+  return days.map((d, i) => (i === 0 ? 0 : Math.max(0, d - days[i - 1])));
 }
 
 export async function POST(req: NextRequest) {
@@ -121,11 +141,12 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Push the sequence steps.
+    const delays = toStepDelays(steps);
     const sequences = steps.map((s, i) => ({
       seq_number: i + 1,
       subject: toSmartleadTokens(s.subject),
       email_body: toEmailBody(s),
-      seq_delay_details: { delay_in_days: parseDelayDays(s.day) },
+      seq_delay_details: { delay_in_days: delays[i] },
     }));
     const seqRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/sequences`, apiKey), {
       method: "POST",
@@ -186,9 +207,9 @@ export async function POST(req: NextRequest) {
             await assignRes.text()
           );
         } else {
-          // Default business-hours window. IST/weekdays matches this app's
-          // India contact targeting; there's no UI yet to configure this
-          // per campaign.
+          // Default sending window: Tuesday to Thursday, 10 AM to 5 PM IST —
+          // the B2B window that works best for Indian recipients. There's no
+          // UI yet to configure this per campaign.
           const scheduleRes = await fetch(
             smartleadUrl(`/campaigns/${campaignId}/schedule`, apiKey),
             {
@@ -196,9 +217,9 @@ export async function POST(req: NextRequest) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 timezone: "Asia/Kolkata",
-                days_of_the_week: [1, 2, 3, 4, 5],
-                start_hour: "09:00",
-                end_hour: "18:00",
+                days_of_the_week: [2, 3, 4],
+                start_hour: "10:00",
+                end_hour: "17:00",
                 min_time_btw_emails: 15,
                 max_new_leads_per_day: 50,
               }),

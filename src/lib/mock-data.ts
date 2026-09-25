@@ -19,7 +19,7 @@ export const WIZARD_META: Record<WizardStepKey, { crumb: string; title: string }
 };
 
 export type CaseQuestion = {
-  section: 0 | 1 | 2;
+  section: number;
   id: string;
   label: string;
   value: string;
@@ -28,37 +28,50 @@ export type CaseQuestion = {
 };
 
 export const CASE_SECTIONS = [
-  { section: 0, title: "The customer" },
-  { section: 1, title: "What we delivered" },
-  { section: 2, title: "Proof & permission" },
+  { section: 0, title: "The client" },
+  { section: 1, title: "Before HROne" },
+  { section: 2, title: "What HROne did" },
+  { section: 3, title: "Permission & HROne context" },
 ] as const;
 
+// Pre-filled and editable — this is the one block that is about us, not the
+// client, so the sequence writer has something to close on. Reps should swap
+// the proof points for whatever is current before launching.
+export const HRONE_CONTEXT_DEFAULT = `HROne is a full-suite HCM platform built for Indian businesses. Modules: core HR, payroll with statutory compliance (PF, ESI, PT, LWF, TDS), attendance and leave, shift and roster, recruitment, performance, expense and travel, employee helpdesk, and the InboxHR mobile app.
+Differentiators: inbox-style HR that works like email, India-first statutory compliance across states, configurable policies without custom development, biometric and Tally/ERP integrations, go-live in weeks rather than quarters.
+Proof points: <add the two strongest current ones, e.g. customer count, average payroll-cycle reduction>.
+Call to action: a 15-minute call to see the payroll and compliance flow on their own headcount and states.`;
+
 export const CASE_QS: CaseQuestion[] = [
-  { section: 0, id: "q1", label: "Which customer is this, and who owns the relationship?", value: "Veldhoven Freight — Marcus Beaulieu (CS), Priya Venkat (marketing)" },
-  { section: 0, id: "q2", label: "What were they using before us?", value: "Excel rate cards, a legacy TMS from 2011, and email for exceptions.", long: true },
-  { section: 0, id: "q3", label: "Who signed, and who actually pushed it through?", value: "COO signed. Dock operations manager was the internal champion." },
-  { section: 1, id: "q4", label: "What did the onboarding team build or configure?", value: "Migrated 14,000 historic loads, built the carrier scorecard, wired two EDI partners, trained 40 dock staff over three sessions.", long: true },
-  { section: 1, id: "q5", label: "How long from contract to first value?", value: "31 days to first automated invoice" },
-  { section: 1, id: "q6", label: "What went wrong, and how was it handled?", value: "EDI mapping for one partner took three weeks longer than planned. We ran it manually in parallel so nothing stalled.", long: true },
-  { section: 1, id: "q7", label: "Anything unusual we would not do again?", value: "", long: true, hint: "Optional, but it is the field reps trust most" },
-  { section: 2, id: "q8", label: "The headline number", value: "Dock-to-invoice down from 9 days to 2" },
-  { section: 2, id: "q9", label: "A quote we are cleared to use", value: "We stopped chasing paperwork and started chasing margin. Two weeks in, my team asked why we waited.", long: true },
-  { section: 2, id: "q10", label: "Who is quotable, with title", value: "Anneke de Vries, COO, Veldhoven Freight" },
-  { section: 2, id: "q11", label: "Approved for external use?", value: "Yes — logo and quote, name in subject lines allowed" },
+  { section: 0, id: "industry", label: "What industry is the client in?", value: "Auto components manufacturing" },
+  { section: 0, id: "headcount", label: "How many employees do they have?", value: "1,200 — 900 on the shop floor, 300 staff" },
+  { section: 0, id: "locations", label: "How many locations or states do they operate in?", value: "5 plants across 3 states (Maharashtra, Gujarat, Tamil Nadu)" },
+  { section: 1, id: "before_hrone", label: "How were they managing HR and payroll before?", value: "Excel payroll sheets per plant, a 2014 desktop payroll tool at head office, biometric punches exported manually, leave over email.", long: true },
+  { section: 1, id: "problems", label: "What problems were they facing?", value: "Payroll took 9 days and still ran late. Overtime and shift allowances were calculated by hand per plant. Multi-state PT and LWF rules were tracked in a spreadsheet, and two PF filings were revised after errors. HR spent most of the month answering payslip queries.", long: true },
+  { section: 2, id: "modules", label: "Which HROne modules did you implement?", value: "Payroll with statutory compliance, attendance and shift management, leave, core HR, employee helpdesk, InboxHR mobile app.", long: true },
+  { section: 2, id: "solution", label: "How did HROne solve those problems?", value: "Biometric devices at all 5 plants now push punches straight into attendance. Shift and OT rules are configured per plant, so payroll inputs are locked automatically. State-wise PT, LWF, PF and ESI rules run inside payroll with ready challans. Employees see payslips and raise queries in the mobile app instead of walking into HR.", long: true },
+  { section: 2, id: "benefits", label: "What results did they see after go-live? Include numbers if possible.", value: "Payroll cycle down from 9 days to 2. Zero revised statutory filings in the last 3 quarters. Around 70% fewer payslip queries to the HR team. Live on the first plant in 3 weeks, all 5 plants inside 8 weeks.", long: true },
+  { section: 3, id: "client_role", label: "Whose experience is this — role of the client contact?", value: "Head of HR" },
+  { section: 3, id: "name_allowed", label: "Cleared to name the client in emails? (yes / no)", value: "no", hint: "If no, emails say \"a 1,200-employee manufacturer\" instead" },
+  { section: 3, id: "hrone_context", label: "HROne context — products, differentiators, proof points, call to action", value: HRONE_CONTEXT_DEFAULT, long: true },
 ];
+
+// Fields we ask the sequence writer to treat as background about HROne and
+// about what we may say, rather than as facts drawn from the client's story.
+export const CONTEXT_QS = ["client_role", "name_allowed", "hrone_context"];
 
 export type CaseStudyOption = {
   customerName: string;
   customerDomain?: string;
   industry?: string;
-  previousSolution?: string;
-  sponsor?: string;
-  whatWeDelivered?: string;
-  timeToValue?: string;
-  challenge?: string;
-  headlineNumber?: string;
-  quote?: string;
-  quotableContact?: string;
+  headcount?: string;
+  locations?: string;
+  beforeHrone?: string;
+  problems?: string;
+  modules?: string;
+  solution?: string;
+  benefits?: string;
+  clientRole?: string;
   sourceUrl: string;
 };
 
@@ -68,19 +81,18 @@ export function caseStudyToAnswers(cs: CaseStudyOption): Record<string, string> 
     if (value && value.trim().length > 0) answers[id] = value;
   };
 
-  set(
-    "q1",
-    [cs.customerName, cs.customerDomain].filter(Boolean).join(" — ") +
-      (cs.sponsor ? ` (${cs.sponsor})` : "")
-  );
-  set("q2", cs.previousSolution);
-  set("q3", cs.sponsor);
-  set("q4", cs.whatWeDelivered);
-  set("q5", cs.timeToValue);
-  set("q6", cs.challenge);
-  set("q8", cs.headlineNumber);
-  set("q9", cs.quote);
-  set("q10", cs.quotableContact);
+  set("industry", cs.industry);
+  set("headcount", cs.headcount);
+  set("locations", cs.locations);
+  set("before_hrone", cs.beforeHrone);
+  set("problems", cs.problems);
+  set("modules", cs.modules);
+  set("solution", cs.solution);
+  set("benefits", cs.benefits);
+  set("client_role", cs.clientRole);
+  // A published case study on hrone.cloud is already public, so the client
+  // can be named in outreach that cites it.
+  set("name_allowed", "yes");
 
   return answers;
 }
@@ -202,10 +214,13 @@ export const CONTACT_GROUPS: ContactGroup[] = [
 export type SequenceStep = {
   step: string;
   day: string;
+  framework: string;
   subject: string;
+  preheader: string;
   hook: string;
   content: string;
   cta: string;
+  ps: string;
   sources: string[];
   state: "Drafted" | "Needs edit";
 };
@@ -215,45 +230,66 @@ export const SEQUENCE_STYLES: Record<SequenceStep["state"], string> = {
   "Needs edit": "bg-[#F2EDDF] text-[#7A5B27]",
 };
 
+// The copywriting framework each step is written to. Kept in one place so the
+// generator prompt and the reviewer's UI label the steps the same way.
+export const SEQUENCE_FRAMEWORKS = [
+  { day: 0, framework: "PAS", note: "Problem → Agitate → Solution" },
+  { day: 3, framework: "BAB", note: "Before → After → Bridge" },
+  { day: 7, framework: "FAB", note: "Features → Advantages → Benefits" },
+  { day: 12, framework: "Founder note", note: "Plain-text, personal, no pitch" },
+] as const;
+
 export const INITIAL_SEQUENCE: SequenceStep[] = [
   {
     step: "Step 1",
     day: "Day 0",
-    subject: "Veldhoven cut dock-to-invoice from 9 days to 2",
-    hook: "{{firstName}} — we spent this spring inside Veldhoven Freight, a Dutch broker running the same legacy TMS most of the market is still on.",
-    content: "Their dock-to-invoice cycle was nine days. It is two now. The work was unglamorous: migrating 14,000 historic loads, building a carrier scorecard, wiring two EDI partners.",
-    cta: "Worth 20 minutes to compare notes on where {{company}}'s cycle actually stalls?",
-    sources: ["Headline number", "What we configured"],
+    framework: "PAS",
+    subject: "payroll across 3 states",
+    preheader: "What 5 plants on spreadsheets usually costs by the 7th",
+    hook: "{{firstName}}, running payroll for plants in three states usually means three sets of PT and LWF rules and one spreadsheet holding it together.",
+    content: "One mismatch in shift or OT inputs and the cycle slips past the 7th, then the revised filing follows. A 1,200-employee manufacturer we work with was spending 9 days a month on exactly that. It is 2 days now.",
+    cta: "Is payroll at {{company}} still running on plant-wise sheets?",
+    ps: "",
+    sources: ["Problems", "Benefits"],
     state: "Drafted",
   },
   {
     step: "Step 2",
     day: "Day 3",
-    subject: "The part that took three weeks longer",
-    hook: "One thing I left out last time: Veldhoven's EDI mapping for a single partner ran three weeks past plan.",
-    content: "We kept that lane manual in parallel so nothing stalled.",
-    cta: "I mention it because every broker I talk to has one partner that will not behave — which is yours?",
-    sources: ["What went wrong"],
+    framework: "BAB",
+    subject: "9 days to 2 days",
+    preheader: "How a 5-plant manufacturer closed payroll in two days",
+    hook: "Before: Excel payroll per plant, punches exported by hand, PT and LWF tracked in a sheet, two PF filings revised.",
+    content: "After: biometric punches flow straight into attendance, shift and OT rules are configured per plant, and state-wise statutory runs inside payroll with ready challans. Payroll went from 9 days to 2, with no revised filings in three quarters.",
+    cta: "Does month-end at {{company}} look closer to the before or the after?",
+    ps: "",
+    sources: ["Before HROne", "Solution", "Benefits"],
     state: "Drafted",
   },
   {
     step: "Step 3",
     day: "Day 7",
-    subject: "Anneke de Vries, COO",
-    hook: '"We stopped chasing paperwork and started chasing margin. Two weeks in, my team asked why we waited."',
-    content: "That is Veldhoven's COO, six months after go-live.",
-    cta: "Happy to put you two on a call instead of hearing it from me — worth a short intro?",
-    sources: ["Approved quote", "Quotable contact"],
+    framework: "FAB",
+    subject: "switching mid-year",
+    preheader: "First plant live in 3 weeks, the rest inside 8",
+    hook: "The usual worry at this point is the switch itself, {{firstName}} — mid-year migration, biometric devices, past payroll data.",
+    content: "We went plant by plant: payroll with statutory compliance, attendance, leave and the mobile app on the first plant in 3 weeks, all 5 inside 8. Shop floor never saw a gap, and HR stopped fielding payslip queries once employees had them in the app.",
+    cta: "Want me to walk you through how that sequencing would work for {{company}}'s sites?",
+    ps: "",
+    sources: ["Modules automated", "Solution", "Benefits"],
     state: "Drafted",
   },
   {
     step: "Step 4",
-    day: "Day 14",
-    subject: "Closing the loop",
-    hook: "I will stop here, {{firstName}}.",
-    content: "If the nine-days-to-two story is interesting for {{company}} later in the year, the door is open — and I can still arrange the Veldhoven intro.",
-    cta: "Worth staying in touch, or should I close the loop for now?",
-    sources: ["Headline number"],
+    day: "Day 12",
+    framework: "Founder note",
+    subject: "closing this off",
+    preheader: "No follow-ups after this one",
+    hook: "{{firstName}}, I will stop writing after this.",
+    content: "If multi-state payroll is not the thing worth fixing at {{company}} this year, that is fair — most teams pick it up when a plant is added or an audit lands.",
+    cta: "Should I close this off, or check back after the financial year end?",
+    ps: "Happy to send the 5-plant story as a one-pager either way, no call needed.",
+    sources: ["Locations", "Benefits"],
     state: "Needs edit",
   },
 ];

@@ -57,7 +57,7 @@ type WizardState = {
   emails: SequenceStep[];
   setEmailField: (
     index: number,
-    field: "subject" | "hook" | "content" | "cta",
+    field: "subject" | "preheader" | "hook" | "content" | "cta" | "ps",
     value: string
   ) => void;
   sequenceStatus: "idle" | "loading" | "error";
@@ -295,7 +295,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   const [emails, setEmails] = useState<SequenceStep[]>([]);
   const setEmailField = (
     index: number,
-    field: "subject" | "hook" | "content" | "cta",
+    field: "subject" | "preheader" | "hook" | "content" | "cta" | "ps",
     value: string
   ) =>
     setEmails((prev) =>
@@ -356,12 +356,14 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           campaignName: `${seedName.split(" ")[0]} × freight brokers, EU`,
-          steps: emails.map(({ day, subject, hook, content, cta }) => ({
+          steps: emails.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
             day,
             subject,
+            preheader,
             hook,
             content,
             cta,
+            ps,
           })),
           groups: contactGroups.map(({ company, domain, people }) => ({
             company,

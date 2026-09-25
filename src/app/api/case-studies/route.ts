@@ -18,35 +18,38 @@ const OUTPUT_SCHEMA = {
         properties: {
           customerName: { type: "string" },
           customerDomain: { type: "string" },
-          industry: { type: "string" },
-          previousSolution: {
+          industry: { type: "string", description: "The industry the customer operates in" },
+          headcount: {
             type: "string",
-            description: "What the customer used before HROne",
+            description: "How many employees the customer has",
           },
-          sponsor: {
+          locations: {
             type: "string",
-            description: "Who signed or championed the deal, if mentioned",
+            description: "How many locations, cities or states the customer operates in",
           },
-          whatWeDelivered: {
+          beforeHrone: {
             type: "string",
-            description: "What HROne's team built, configured, or implemented",
+            description: "How the customer managed HR and payroll before HROne",
           },
-          timeToValue: {
+          problems: {
             type: "string",
-            description: "Time from contract/signup to first measurable value",
+            description: "The problems they were facing before HROne",
           },
-          challenge: {
+          modules: {
             type: "string",
-            description: "Any obstacle encountered and how it was handled",
+            description: "Which HROne modules were implemented",
           },
-          headlineNumber: {
+          solution: {
             type: "string",
-            description: "The single most quotable metric or result",
+            description: "How HROne solved those problems",
           },
-          quote: { type: "string" },
-          quotableContact: {
+          benefits: {
             type: "string",
-            description: "Name and title of the person quoted",
+            description: "Results after go-live, with numbers wherever they are stated",
+          },
+          clientRole: {
+            type: "string",
+            description: "Role of the customer contact quoted or interviewed",
           },
           sourceUrl: { type: "string", format: "uri" },
         },
@@ -58,13 +61,14 @@ const OUTPUT_SCHEMA = {
 function buildQuery(prospectUrl: string) {
   return (
     "Find case studies published by hrone.cloud (HROne, an HR and payroll " +
-    `SaaS platform) about customers whose profile is relevant to the ` +
-    `prospect at ${prospectUrl}. For each relevant case study, return the ` +
-    "customer, what they used before HROne, who sponsored or championed the " +
-    "deal, what HROne delivered, the time to first value, any challenges and " +
-    "how they were handled, the headline metric, a quotable line with " +
-    "attribution, and the source URL. Only include case studies you can cite " +
-    "a real source URL for."
+    `SaaS platform for Indian businesses) about customers whose profile is ` +
+    `relevant to the prospect at ${prospectUrl}. For each relevant case ` +
+    "study, return the customer, their industry, employee headcount, number " +
+    "of locations or states, how they managed HR and payroll before HROne, " +
+    "the problems they faced, which HROne modules were implemented, how " +
+    "HROne solved those problems, the results after go-live with any numbers " +
+    "stated, the role of the customer contact quoted, and the source URL. " +
+    "Only include case studies you can cite a real source URL for."
   );
 }
 
