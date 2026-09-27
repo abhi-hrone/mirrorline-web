@@ -32,6 +32,12 @@ type WizardState = {
   findCaseStudies: () => Promise<void>;
   selectCaseStudy: (cs: CaseStudyOption) => void;
 
+  caseContent: string;
+  setCaseContent: (v: string) => void;
+  fillStatus: "idle" | "loading" | "error";
+  fillError: string | null;
+  fillFromContent: () => Promise<void>;
+
   companies: Company[];
   lookalikeStatus: "idle" | "loading" | "error";
   lookalikeError: string | null;
@@ -125,6 +131,35 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     const mapped = caseStudyToAnswers(cs);
     setAnswers((prev) => ({ ...prev, ...mapped }));
     setSelectedCaseStudyUrl(cs.sourceUrl);
+  };
+
+  const [caseContent, setCaseContent] = useState("");
+  const [fillStatus, setFillStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [fillError, setFillError] = useState<string | null>(null);
+
+  const fillFromContent = async () => {
+    const content = caseContent.trim();
+    if (!content) return;
+    setFillStatus("loading");
+    setFillError(null);
+    try {
+      const res = await fetch("/api/case-studies/fill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Extraction failed");
+      setAnswers((prev) => ({ ...prev, ...data.answers }));
+      setFillStatus("idle");
+    } catch (err) {
+      setFillError(
+        err instanceof Error
+          ? err.message
+          : "That didn't have enough detail to fill the form. Add more and try again."
+      );
+      setFillStatus("error");
+    }
   };
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -410,6 +445,11 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         selectedCaseStudyUrl,
         findCaseStudies,
         selectCaseStudy,
+        caseContent,
+        setCaseContent,
+        fillStatus,
+        fillError,
+        fillFromContent,
         companies,
         lookalikeStatus,
         lookalikeError,
