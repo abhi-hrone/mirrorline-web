@@ -7,6 +7,8 @@ import {
   domainFromApolloOrg,
   toApolloLocations,
 } from "@/lib/apollo";
+import { discolikeLookalikeCompanies } from "@/lib/discolike";
+import { withFallback } from "@/lib/fallback";
 
 const OCEAN_URL = "https://api.ocean.io/v3/search/companies";
 
@@ -145,12 +147,42 @@ async function apolloLookalikes(key: string, domain: string): Promise<Company[]>
   return companies;
 }
 
+async function discolikeLookalikes(key: string, domain: string): Promise<Company[]> {
+  const results = await discolikeLookalikeCompanies(key, domain, LOOKALIKE_COUNTRIES, RETURNED_COMPANIES_LIMIT);
+
+  const companies = results.flatMap((c, i) => {
+    if (!c.domain) return [];
+    return [
+      {
+        id: `discolike-${i}-${c.domain}`,
+        name: c.name ?? c.domain,
+        domain: c.domain,
+        // DiscoLike's similarity score is 0-100 like Ocean's, when present.
+        score: c.similarity ?? Math.max(60, 90 - i),
+        size: c.employees ?? "—",
+        region: regionFor(c.address?.country ?? ""),
+        fit: "",
+      },
+    ];
+  });
+
+  if (companies.length === 0) {
+    throw new Error(`DiscoLike found no lookalikes for ${domain}`);
+  }
+
+  return companies;
+}
+
 export async function POST(req: NextRequest) {
   const oceanToken = process.env.OCEAN_API_TOKEN;
   const apolloKey = process.env.APOLLO_API_KEY;
-  if (!oceanToken && !apolloKey) {
+  const discolikeKey = process.env.DISCOLIKE_API_KEY;
+  if (!oceanToken && !apolloKey && !discolikeKey) {
     return NextResponse.json(
-      { error: "Neither OCEAN_API_TOKEN nor APOLLO_API_KEY is set on the server." },
+      {
+        error:
+          "None of OCEAN_API_TOKEN, APOLLO_API_KEY, or DISCOLIKE_API_KEY is set on the server.",
+      },
       { status: 500 }
     );
   }
@@ -171,25 +203,19 @@ export async function POST(req: NextRequest) {
 
   let companies: Company[];
   try {
-    if (!oceanToken) throw new Error("OCEAN_API_TOKEN is not set on the server.");
-    companies = await oceanLookalikes(oceanToken, domain);
-  } catch (oceanErr) {
-    console.error("Ocean lookalike search failed, falling back to Apollo", oceanErr);
-    if (!apolloKey) {
-      return NextResponse.json(
-        { error: `Lookalike search failed: ${(oceanErr as Error).message}` },
-        { status: 502 }
-      );
-    }
-    try {
-      companies = await apolloLookalikes(apolloKey, domain);
-    } catch (apolloErr) {
-      console.error("Apollo lookalike fallback also failed", apolloErr);
-      return NextResponse.json(
-        { error: "Lookalike search failed on both Ocean and Apollo. Check server logs." },
-        { status: 502 }
-      );
-    }
+    companies = await withFallback([
+      oceanToken ? { name: "Ocean", run: () => oceanLookalikes(oceanToken, domain) } : null,
+      apolloKey ? { name: "Apollo", run: () => apolloLookalikes(apolloKey, domain) } : null,
+      discolikeKey
+        ? { name: "DiscoLike", run: () => discolikeLookalikes(discolikeKey, domain) }
+        : null,
+    ]);
+  } catch (err) {
+    console.error("Lookalike search failed on every configured provider", err);
+    return NextResponse.json(
+      { error: `Lookalike search failed: ${(err as Error).message}` },
+      { status: 502 }
+    );
   }
 
   await saveLookalikes(domain, companies).catch((err) =>

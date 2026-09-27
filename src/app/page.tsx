@@ -1,6 +1,31 @@
-import Link from "next/link";
+"use client";
+
+import { useRouter } from "next/navigation";
 
 export default function SignInPage() {
+  const router = useRouter();
+
+  const handleContinue = async () => {
+    const key = window.prompt("Enter your security key to continue:");
+    if (!key) return;
+
+    try {
+      const res = await fetch("/api/auth/verify-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key }),
+      });
+      const data = await res.json();
+      if (res.ok && data.valid) {
+        router.push("/campaigns");
+      } else {
+        window.alert("Incorrect security key.");
+      }
+    } catch {
+      window.alert("Could not verify the security key. Try again.");
+    }
+  };
+
   return (
     <div className="grid min-h-screen grid-cols-1 bg-paper md:grid-cols-[1.05fr_0.95fr]">
       <div className="flex min-w-0 flex-col justify-between gap-12 p-8 sm:p-12 lg:p-20">
@@ -45,8 +70,9 @@ export default function SignInPage() {
             Use your work account. Access follows your Microsoft groups.
           </p>
 
-          <Link
-            href="/campaigns"
+          <button
+            type="button"
+            onClick={handleContinue}
             className="flex w-full cursor-pointer items-center justify-center gap-3 rounded-md bg-paper px-[18px] py-[15px] text-[15px] font-semibold text-ink transition-transform hover:-translate-y-px"
           >
             <span className="grid grid-cols-2 grid-rows-2 gap-0.5">
@@ -56,7 +82,7 @@ export default function SignInPage() {
               <span className="h-[9px] w-[9px] bg-[#FFB900]" />
             </span>
             Continue with Microsoft
-          </Link>
+          </button>
 
           <div className="mt-5 rounded-md border border-[#332F22] p-3.5 font-mono text-[11px] leading-[1.7] text-muted">
             <div>tenant &nbsp;&middot;&nbsp; northbeam.co</div>
