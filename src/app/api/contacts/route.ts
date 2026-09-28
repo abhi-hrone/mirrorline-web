@@ -9,10 +9,38 @@ import type { ContactConfidence } from "@/lib/contact-reveal";
 export const maxDuration = 120;
 
 const OCEAN_SEARCH_URL = "https://api.ocean.io/v3/search/people";
-const MAX_COMPANIES = 15;
+// Matches the lookalikes step's 100-company result size, so "select all" there
+// is never silently truncated here.
+const MAX_COMPANIES = 100;
+// Searches run this many at a time: firing 100 at once trips provider rate
+// limits (Apollo 429s), which would push every company onto the fallbacks.
+const SEARCH_CONCURRENCY = 8;
 const PEOPLE_PER_COMPANY = 5;
 // Only contacts located in these countries (ISO 3166-1 alpha-2).
 const CONTACT_COUNTRIES = ["in"];
+
+// Like Promise.allSettled over `items`, but with at most `limit` in flight.
+async function settleWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        try {
+          results[i] = { status: "fulfilled", value: await fn(items[i]) };
+        } catch (reason) {
+          results[i] = { status: "rejected", reason };
+        }
+      }
+    })
+  );
+  return results;
+}
 
 const logger = createLogger("contacts");
 const log = (msg: string) => logger.info(msg);
@@ -193,10 +221,8 @@ export const POST = withRequestLog("contacts", async (req: NextRequest) => {
       `providers configured: Apollo=${!!apolloKey}, Ocean=${!!oceanToken}, DiscoLike=${!!discolikeKey}`
   );
 
-  const results = await Promise.allSettled(
-    companies.map((c) =>
-      searchPeople(oceanToken, apolloKey, discolikeKey, c.domain, titles, departments)
-    )
+  const results = await settleWithLimit(companies, SEARCH_CONCURRENCY, (c) =>
+    searchPeople(oceanToken, apolloKey, discolikeKey, c.domain, titles, departments)
   );
 
   const failures = results.filter((r) => r.status === "rejected");
