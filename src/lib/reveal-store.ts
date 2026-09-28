@@ -1,4 +1,7 @@
+import { createLogger } from "@/lib/logger";
 import { getCachedReveal, saveReveal, saveRevealChannel } from "@/lib/research-cache";
+
+const log = createLogger("reveal-store");
 
 export type RevealResult = {
   status: "pending" | "revealed" | "unavailable";
@@ -19,7 +22,7 @@ export async function setPending(id: string) {
   if (store.has(id)) return;
   const entry: StoreEntry = { status: "pending" };
   store.set(id, entry);
-  await saveReveal(id, entry).catch((err) => console.error("Reveal cache save failed", err));
+  await saveReveal(id, entry).catch((err) => log.error("Reveal cache save failed", err, { personId: id }));
 }
 
 // Ocean sends emails and phones as two separate webhook calls that can land
@@ -47,7 +50,7 @@ export async function getReveal(id: string): Promise<RevealResult | undefined> {
   if (inMemory?.emailDone && inMemory?.phoneDone) return inMemory;
 
   const cached = await getCachedReveal(id).catch((err) => {
-    console.error("Reveal cache lookup failed", err);
+    log.error("Reveal cache lookup failed", err, { personId: id });
     return null;
   });
   if (cached) {

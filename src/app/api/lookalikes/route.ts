@@ -9,6 +9,9 @@ import {
 } from "@/lib/apollo";
 import { discolikeLookalikeCompanies } from "@/lib/discolike";
 import { withFallback } from "@/lib/fallback";
+import { createLogger, withRequestLog } from "@/lib/logger";
+
+const log = createLogger("lookalikes");
 
 const OCEAN_URL = "https://api.ocean.io/v3/search/companies";
 
@@ -173,7 +176,7 @@ async function discolikeLookalikes(key: string, domain: string): Promise<Company
   return companies;
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("lookalikes", async (req: NextRequest) => {
   const oceanToken = process.env.OCEAN_API_TOKEN;
   const apolloKey = process.env.APOLLO_API_KEY;
   const discolikeKey = process.env.DISCOLIKE_API_KEY;
@@ -194,7 +197,7 @@ export async function POST(req: NextRequest) {
   }
 
   const cached = await getCachedLookalikes(domain).catch((err) => {
-    console.error("Lookalikes cache lookup failed", err);
+    log.error("Lookalikes cache lookup failed", err, { domain });
     return null;
   });
   if (cached) {
@@ -211,7 +214,7 @@ export async function POST(req: NextRequest) {
         : null,
     ]);
   } catch (err) {
-    console.error("Lookalike search failed on every configured provider", err);
+    log.error("Lookalike search failed on every configured provider", err, { domain });
     return NextResponse.json(
       { error: `Lookalike search failed: ${(err as Error).message}` },
       { status: 502 }
@@ -219,8 +222,8 @@ export async function POST(req: NextRequest) {
   }
 
   await saveLookalikes(domain, companies).catch((err) =>
-    console.error("Lookalikes cache save failed", err)
+    log.error("Lookalikes cache save failed", err, { domain })
   );
 
   return NextResponse.json({ companies });
-}
+});

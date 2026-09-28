@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { AzureOpenAI } from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod/v4";
+import { withRequestLog } from "@/lib/logger";
 
 export const maxDuration = 120;
 
@@ -57,7 +58,7 @@ Only use facts stated in the content. Never invent a number, a module, a quote, 
 
 Judge "sufficient" strictly: it must describe a specific customer's before-state, at least one concrete problem, and ideally what was done and what changed. General marketing copy, a product description with no customer in it, or a one-line summary is NOT sufficient.`;
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("case-studies-fill", async (req: NextRequest) => {
   const apiKey = process.env.AZURE_OPENAI_KEY;
   const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
   const deployment = process.env.AZURE_OPENAI_MODEL;
@@ -141,4 +142,4 @@ export async function POST(req: NextRequest) {
       { status: 502 }
     );
   }
-}
+});

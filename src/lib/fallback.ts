@@ -1,3 +1,7 @@
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("fallback");
+
 // Runs providers in order, falling through to the next on any failure or if
 // a provider isn't configured (pass `undefined`/`null` in its place). Used to
 // chain providers (e.g. Apollo -> Ocean -> DiscoLike) for a single piece of data, since any
@@ -15,24 +19,22 @@ export async function withFallbackTagged<T>(
     throw new Error("No provider is configured.");
   }
 
-  console.log(`[fallback] provider order: ${usable.map((p) => p.name).join(" -> ")}`);
+  log.info("provider order", { order: usable.map((p) => p.name).join(" -> ") });
 
   let lastErr: unknown;
   for (const [i, p] of usable.entries()) {
     const started = Date.now();
-    console.log(`[fallback] trying ${p.name} (${i + 1}/${usable.length})`);
+    log.info(`trying ${p.name}`, { attempt: `${i + 1}/${usable.length}` });
     try {
       const value = await p.run();
-      console.log(`[fallback] ${p.name} succeeded in ${Date.now() - started}ms`);
+      log.info(`${p.name} succeeded`, { ms: Date.now() - started });
       return { name: p.name, value };
     } catch (err) {
       const next = usable[i + 1];
-      console.error(
-        `[fallback] ${p.name} failed after ${Date.now() - started}ms${
-          next ? `, falling back to ${next.name}` : ", no providers left"
-        }:`,
-        err instanceof Error ? err.message : err
-      );
+      log.error(`${p.name} failed`, err, {
+        ms: Date.now() - started,
+        next: next ? next.name : "none (no providers left)",
+      });
       lastErr = err;
     }
   }

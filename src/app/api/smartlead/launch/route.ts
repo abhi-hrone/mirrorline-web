@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withRequestLog } from "@/lib/logger";
 
 export const maxDuration = 60;
 
@@ -79,7 +80,7 @@ function toStepDelays(steps: StepIn[]) {
   return days.map((d, i) => (i === 0 ? 0 : Math.max(0, d - days[i - 1])));
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
   const apiKey = process.env.SMARTLEAD_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -284,4 +285,4 @@ export async function POST(req: NextRequest) {
       { status: 502 }
     );
   }
-}
+});

@@ -3,6 +3,7 @@ import { AzureOpenAI } from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod/v4";
 import { CASE_QS, CONTEXT_QS, SEQUENCE_FRAMEWORKS } from "@/lib/mock-data";
+import { withRequestLog } from "@/lib/logger";
 
 export const maxDuration = 120;
 
@@ -63,7 +64,7 @@ RULES:
 - Vary the angle across steps so the sequence does not repeat itself, and never repeat the same number in the same words twice.
 - Avoid these words and anything built on them: revolutionize, cutting-edge, seamless or seamlessly, game-changing, streamline, leverage, empower, "just following up", "quick question", "I hope this email finds you well", "imagine if".`;
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("sequence", async (req: NextRequest) => {
   const apiKey = process.env.AZURE_OPENAI_KEY;
   const endpoint = process.env.AZURE_OPENAI_ENDPOINT;
   const deployment = process.env.AZURE_OPENAI_MODEL;
@@ -222,4 +223,4 @@ Write exactly ${numSteps} emails, in that order, using only the facts above. The
       { status: 502 }
     );
   }
-}
+});

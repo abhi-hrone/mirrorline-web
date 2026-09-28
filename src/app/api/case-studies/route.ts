@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Exa from "exa-js";
 import { normalizeDomain } from "@/lib/domain";
 import { getCachedCaseStudies, saveCaseStudies } from "@/lib/research-cache";
+import { withRequestLog } from "@/lib/logger";
 
 export const maxDuration = 300;
 
@@ -72,7 +73,7 @@ function buildQuery(prospectUrl: string) {
   );
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("case-studies", async (req: NextRequest) => {
   const apiKey = process.env.EXA_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -122,4 +123,4 @@ export async function POST(req: NextRequest) {
       { status: 502 }
     );
   }
-}
+});

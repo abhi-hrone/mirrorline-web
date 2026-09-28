@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveEmail, resolvePhone } from "@/lib/reveal-store";
 import { isValidRevealWebhookToken } from "@/lib/webhook-auth";
+import { createLogger, withRequestLog } from "@/lib/logger";
+
+const log = createLogger("reveal-webhook");
 
 type EmailResult = { personId: string; address?: string };
 type PhoneResult = { personId: string; numbers?: string[] };
@@ -8,9 +11,9 @@ type PhoneResult = { personId: string; numbers?: string[] };
 // Ocean posts here twice per reveal we requested in /api/contacts (see
 // requestReveals() there) — once from the Reveal Emails webhook, once from
 // Reveal Phones — each keyed by the personId we originally submitted.
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("reveal-webhook", async (req: NextRequest) => {
   if (!isValidRevealWebhookToken(req.nextUrl.searchParams.get("token"))) {
-    console.error("[reveal-webhook] rejected: missing or invalid token");
+    log.warn("rejected: missing or invalid token");
     return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
   }
 
@@ -19,7 +22,12 @@ export async function POST(req: NextRequest) {
 
   const emails: EmailResult[] = Array.isArray(body.emails) ? body.emails : [];
   const phones: PhoneResult[] = Array.isArray(body.phones) ? body.phones : [];
-  console.log(`[reveal-webhook] received ${emails.length} emails, ${phones.length} phones`);
+  log.info("received", {
+    emails: emails.length,
+    emailsWithAddress: emails.filter((e) => e?.address).length,
+    phones: phones.length,
+    phonesWithNumber: phones.filter((p) => p?.numbers?.length).length,
+  });
 
   // Awaited so the Mongo writes finish before the response: on serverless the
   // function can be frozen right after responding, dropping pending writes.
@@ -29,4 +37,4 @@ export async function POST(req: NextRequest) {
   ]);
 
   return NextResponse.json({ ok: true });
-}
+});

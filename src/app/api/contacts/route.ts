@@ -5,6 +5,7 @@ import { apolloRevealEmail, apolloSearchPeople, toApolloLocations } from "@/lib/
 import { discolikeRevealEmail, discolikeSearchPeople } from "@/lib/discolike";
 import { withFallbackTagged } from "@/lib/fallback";
 import { revealWebhookToken } from "@/lib/webhook-auth";
+import { createLogger, withRequestLog } from "@/lib/logger";
 
 export const maxDuration = 120;
 
@@ -16,7 +17,8 @@ const PEOPLE_PER_COMPANY = 5;
 // Only contacts located in these countries (ISO 3166-1 alpha-2).
 const CONTACT_COUNTRIES = ["in"];
 
-const log = (msg: string) => console.log(`[contacts] ${msg}`);
+const logger = createLogger("contacts");
+const log = (msg: string) => logger.info(msg);
 
 type OceanPerson = {
   id?: string;
@@ -69,17 +71,17 @@ async function requestReveals(token: string, personIds: string[]): Promise<boole
       fetch(OCEAN_REVEAL_PHONES_URL, { method: "POST", headers, body }),
     ]);
     if (!emailRes.ok) {
-      console.error("Ocean reveal emails request failed", emailRes.status, await emailRes.text());
+      logger.error("Ocean reveal emails request failed", await emailRes.text(), { status: emailRes.status });
     }
     if (!phoneRes.ok) {
-      console.error("Ocean reveal phones request failed", phoneRes.status, await phoneRes.text());
+      logger.error("Ocean reveal phones request failed", await phoneRes.text(), { status: phoneRes.status });
     }
     log(
       `Ocean reveal request for ${personIds.length} people: emails=${emailRes.status}, phones=${phoneRes.status} -> webhook ${base.replace(/\/$/, "")}/api/contacts/reveal-webhook`
     );
     return emailRes.ok || phoneRes.ok;
   } catch (err) {
-    console.error("Ocean reveal request failed", err);
+    logger.error("Ocean reveal request failed", err);
     return false;
   }
 }
@@ -167,7 +169,7 @@ async function searchPeople(
   departments: string[]
 ): Promise<{ source: string; people: OceanPerson[] }> {
   const cached = await getCachedContacts(domain, titles, departments).catch((err) => {
-    console.error("Contacts cache lookup failed", err);
+    logger.error("Contacts cache lookup failed", err, { domain });
     return null;
   });
   if (cached) {
@@ -193,13 +195,13 @@ async function searchPeople(
 
   log(`${domain}: found ${people.length} people via ${source}`);
   await saveContacts(domain, titles, departments, people, source).catch((err) =>
-    console.error("Contacts cache save failed", err)
+    logger.error("Contacts cache save failed", err, { domain })
   );
 
   return { source, people };
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("contacts", async (req: NextRequest) => {
   const oceanToken = process.env.OCEAN_API_TOKEN;
   const apolloKey = process.env.APOLLO_API_KEY;
   const discolikeKey = process.env.DISCOLIKE_API_KEY;
@@ -247,14 +249,14 @@ export async function POST(req: NextRequest) {
 
   const failures = results.filter((r) => r.status === "rejected");
   if (failures.length === results.length) {
-    console.error("People search failed on all companies", (failures[0] as PromiseRejectedResult).reason);
+    logger.error("People search failed on all companies", (failures[0] as PromiseRejectedResult).reason);
     return NextResponse.json(
       { error: "People search failed. Check server logs." },
       { status: 502 }
     );
   }
   failures.forEach((f) =>
-    console.error("People search failed for a company", (f as PromiseRejectedResult).reason)
+    logger.error("People search failed for a company", (f as PromiseRejectedResult).reason)
   );
   log(`search done: ${results.length - failures.length}/${results.length} companies succeeded`);
 
@@ -289,7 +291,7 @@ export async function POST(req: NextRequest) {
 
   const cachedReveals = await getCachedReveals(revealTargets.map((t) => t.person.id as string)).catch(
     (err) => {
-      console.error("Reveal cache lookup failed", err);
+      logger.error("Reveal cache lookup failed", err);
       return new Map<string, { status: string; email?: string; phone?: string }>();
     }
   );
@@ -322,7 +324,7 @@ export async function POST(req: NextRequest) {
       email,
       emailDone: true,
       phoneDone: false,
-    }).catch((err) => console.error("Reveal cache save failed", err));
+    }).catch((err) => logger.error("Reveal cache save failed", err, { personId: p.id }));
   };
 
   // Step 1 — Apollo: synchronous per-person email match by name + domain (+
@@ -346,7 +348,7 @@ export async function POST(req: NextRequest) {
         if (email) await markRevealed(p, email);
         log(`  Apollo ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`);
       } catch (err) {
-        console.error(`  Apollo reveal failed for ${p.name} @ ${domain}:`, err instanceof Error ? err.message : err);
+        logger.error(`  Apollo reveal failed for ${p.name} @ ${domain}`, err);
       }
     })
   );
@@ -408,7 +410,7 @@ export async function POST(req: NextRequest) {
           if (email) await markRevealed(p, email);
           log(`  DiscoLike ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`);
         } catch (err) {
-          console.error(`  DiscoLike reveal failed for ${p.name} @ ${domain}:`, err instanceof Error ? err.message : err);
+          logger.error(`  DiscoLike reveal failed for ${p.name} @ ${domain}`, err);
         }
       })
     );
@@ -423,4 +425,4 @@ export async function POST(req: NextRequest) {
   );
 
   return NextResponse.json({ groups, failedCompanies: failures.length });
-}
+});

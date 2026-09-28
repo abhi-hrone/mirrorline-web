@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE } from "@/proxy";
+import { withRequestLog } from "@/lib/logger";
 
-export async function POST(req: NextRequest) {
+export const POST = withRequestLog("auth", async (req: NextRequest) => {
   const secret = process.env.SECURITY_ACCESS_KEY;
   if (!secret) {
     return NextResponse.json(
@@ -28,4 +29,4 @@ export async function POST(req: NextRequest) {
     });
   }
   return res;
-}
+});
