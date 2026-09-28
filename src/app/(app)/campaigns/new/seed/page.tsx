@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { useWizard } from "@/lib/wizard-context";
-import { BUSINESS_DEPARTMENTS, TECH_DEPARTMENTS } from "@/lib/departments";
+import { ALL_HR_ROLES, HR_ROLE_GROUPS } from "@/lib/hr-roles";
 
 export default function SeedPage() {
   const { seedName, seedWebsite, setSeedName, setSeedWebsite, targetTitles,
     setTargetTitles,
-    targetDepartments,
-    toggleDepartment,
-    setTargetDepartments,
+    targetRoles,
+    toggleRole,
+    setTargetRoles,
   } =
     useWizard();
 
@@ -56,50 +56,58 @@ export default function SeedPage() {
                 className="rounded-md border border-line bg-paper px-[13px] py-[11px] text-[14.5px]"
               />
               <span className="text-[11.5px] text-muted">
-                Comma-separated. Narrows the departments below; leave empty for everyone.
+                Comma-separated. Added to the HR roles below.
               </span>
             </label>
           </div>
 
-          <div className="mt-6 flex flex-col gap-2.5">
+          <div className="mt-6 flex flex-col gap-3.5">
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
-                Target departments
+                Target HR roles
+              </span>
+              <span className="text-xs text-muted">
+                {targetRoles.length} of {ALL_HR_ROLES.length} selected
               </span>
               <button
                 type="button"
-                onClick={() => setTargetDepartments([...BUSINESS_DEPARTMENTS])}
+                onClick={() => setTargetRoles([...ALL_HR_ROLES])}
                 className="cursor-pointer text-xs text-teal underline"
               >
-                All business
+                Select all
               </button>
               <button
                 type="button"
-                onClick={() => setTargetDepartments([])}
+                onClick={() => setTargetRoles([])}
                 className="cursor-pointer text-xs text-muted underline"
               >
                 Clear
               </button>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {[...BUSINESS_DEPARTMENTS, ...TECH_DEPARTMENTS].map((d) => {
-                const on = targetDepartments.includes(d);
-                return (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => toggleDepartment(d)}
-                    className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs ${
-                      on
-                        ? "border-ink bg-ink text-paper"
-                        : "border-line bg-white text-[#55513F]"
-                    }`}
-                  >
-                    {d}
-                  </button>
-                );
-              })}
-            </div>
+            {HR_ROLE_GROUPS.map((group) => (
+              <div key={group.level} className="flex flex-col gap-1.5">
+                <span className="text-[11.5px] font-medium text-[#55513F]">{group.level}</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.roles.map((r) => {
+                    const on = targetRoles.includes(r);
+                    return (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => toggleRole(r)}
+                        className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs ${
+                          on
+                            ? "border-ink bg-ink text-paper"
+                            : "border-line bg-white text-[#55513F]"
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

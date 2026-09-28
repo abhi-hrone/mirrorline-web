@@ -23,7 +23,7 @@ function ReviewContent() {
   const isExisting = existingStatus === "Sending" || existingStatus === "In review";
 
   const {
-    seedName,
+    campaignName,
     checks,
     toggleCheck,
     launched,
@@ -44,7 +44,6 @@ function ReviewContent() {
   const revealedContacts = contactGroups
     .flatMap((g) => g.people)
     .filter((p) => p.email).length;
-  const campaignTitle = `${seedName.split(" ")[0]} × freight brokers, EU`;
 
   if (launched) {
     return (
@@ -110,11 +109,11 @@ function ReviewContent() {
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[860px] flex-col gap-[18px]">
         <div className="rounded-[10px] border border-line bg-white p-5 sm:p-7">
-          <h2 className="mb-1 text-[17px] font-semibold">{campaignTitle}</h2>
+          <h2 className="mb-1 text-[17px] font-semibold">{campaignName}</h2>
           <p className="mb-[22px] text-[13px] text-muted">
             {isExisting
-              ? "Every line below was cleared before this campaign went live."
-              : "Nothing sends until every line below is cleared."}
+              ? "This campaign was cleared before it went live."
+              : "Nothing sends until the box below is checked."}
           </p>
           <div className="flex flex-col">
             {REVIEW_CHECKS.map((check, i) => {
@@ -202,7 +201,7 @@ function ReviewContent() {
                 ? launchError
                 : allChecked
                   ? "Creates a draft Smartlead campaign with the sequence and revealed contacts."
-                  : `${remaining} checks remaining`}
+                  : `${remaining} ${remaining === 1 ? "check" : "checks"} remaining`}
             </span>
           </div>
         )}

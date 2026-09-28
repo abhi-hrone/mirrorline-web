@@ -1,9 +1,10 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
-import { BUSINESS_DEPARTMENTS } from "./departments";
+import { ALL_HR_ROLES } from "./hr-roles";
 import {
   CASE_QS,
+  REVIEW_CHECKS,
   Company,
   ContactGroup,
   SequenceStep,
@@ -18,9 +19,12 @@ type WizardState = {
   setSeedWebsite: (v: string) => void;
   targetTitles: string;
   setTargetTitles: (v: string) => void;
-  targetDepartments: string[];
-  toggleDepartment: (d: string) => void;
-  setTargetDepartments: (v: string[]) => void;
+  // Shown on the review page and used as the Smartlead campaign name.
+  campaignName: string;
+  // HR designations picked on the seed step; sent as the people-search titles.
+  targetRoles: string[];
+  toggleRole: (r: string) => void;
+  setTargetRoles: (v: string[]) => void;
 
   answers: Record<string, string>;
   setAnswer: (id: string, value: string) => void;
@@ -49,11 +53,19 @@ type WizardState = {
   setRegion: (v: string) => void;
   picked: Record<string, boolean>;
   togglePicked: (id: string) => void;
+  setPickedMany: (ids: string[], value: boolean) => void;
 
   contactGroups: ContactGroup[];
   contactStatus: "idle" | "loading" | "error";
   contactError: string | null;
   findContacts: () => Promise<void>;
+  // Step 2 of contact finding: emails are only revealed for ticked contacts.
+  selectedContacts: Record<string, boolean>;
+  toggleContactSelected: (id: string) => void;
+  setContactsSelected: (ids: string[], value: boolean) => void;
+  revealStatus: "idle" | "loading" | "error";
+  revealError: string | null;
+  revealSelected: () => Promise<void>;
   removeContact: (domain: string, index: number) => void;
   addContact: (
     domain: string,
@@ -87,13 +99,17 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   const [seedName, setSeedName] = useState("Salesforce");
   const [seedWebsite, setSeedWebsite] = useState("www.salesforce.com");
   const [targetTitles, setTargetTitles] = useState("");
-  const [targetDepartments, setTargetDepartments] = useState<string[]>([
-    ...BUSINESS_DEPARTMENTS,
-  ]);
-  const toggleDepartment = (d: string) =>
-    setTargetDepartments((prev) =>
-      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]
-    );
+  const [targetRoles, setTargetRoles] = useState<string[]>([...ALL_HR_ROLES]);
+  const campaignName = `${seedName.trim() || "Campaign"} lookalikes · HR leaders · India`;
+  const toggleRole = (r: string) =>
+    setTargetRoles((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
+  // Picked roles plus any free-text keywords, de-duplicated.
+  const searchTitles = () => [
+    ...new Set([
+      ...targetRoles,
+      ...targetTitles.split(",").map((t) => t.trim()).filter(Boolean),
+    ]),
+  ];
 
   const [answers, setAnswers] = useState<Record<string, string>>(() =>
     Object.fromEntries(CASE_QS.map((q) => [q.id, q.value]))
@@ -188,11 +204,13 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const [minScore, setMinScore] = useState(80);
+  const [minScore, setMinScore] = useState(0);
   const [region, setRegion] = useState("All");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const togglePicked = (id: string) =>
     setPicked((prev) => ({ ...prev, [id]: !prev[id] }));
+  const setPickedMany = (ids: string[], value: boolean) =>
+    setPicked((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, value])) }));
 
   const [contactGroups, setContactGroups] = useState<ContactGroup[]>([]);
   // Latest groups, readable from the polling timer without a stale closure.
@@ -202,10 +220,19 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   }, [contactGroups]);
   const [contactStatus, setContactStatus] = useState<"idle" | "loading" | "error">("idle");
   const [contactError, setContactError] = useState<string | null>(null);
+  const [selectedContacts, setSelectedContacts] = useState<Record<string, boolean>>({});
+  const toggleContactSelected = (id: string) =>
+    setSelectedContacts((prev) => ({ ...prev, [id]: !prev[id] }));
+  const setContactsSelected = (ids: string[], value: boolean) =>
+    setSelectedContacts((prev) => ({ ...prev, ...Object.fromEntries(ids.map((id) => [id, value])) }));
+  const [revealStatus, setRevealStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   const findContacts = async () => {
     setContactStatus("loading");
     setContactError(null);
+    setSelectedContacts({});
+    setRevealError(null);
     try {
       const res = await fetch("/api/contacts", {
         method: "POST",
@@ -216,8 +243,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
             domain,
             score,
           })),
-          departments: targetDepartments,
-          titles: targetTitles.split(",").map((t) => t.trim()).filter(Boolean),
+          titles: searchTitles(),
         }),
       });
       const data = await res.json();
@@ -232,10 +258,76 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       setContactStatus("idle");
-      pollReveals(groups);
     } catch (err) {
       setContactError(err instanceof Error ? err.message : "Search failed");
       setContactStatus("error");
+    }
+  };
+
+  // Step 2: reveal emails for the ticked contacts only. Unticked contacts are
+  // never sent, so nothing is looked up or paid for on them.
+  const revealSelected = async () => {
+    const people = contactGroupsRef.current.flatMap((g) =>
+      g.people
+        .filter((p) => p.id && selectedContacts[p.id] && !p.email)
+        .map((p) => ({
+          id: p.id as string,
+          name: p.name,
+          linkedin: p.linkedin ?? "",
+          domain: g.domain,
+          source: g.source ?? "",
+        }))
+    );
+    if (people.length === 0) {
+      setRevealError("Tick at least one contact that hasn't been revealed yet.");
+      setRevealStatus("error");
+      return;
+    }
+    setRevealStatus("loading");
+    setRevealError(null);
+    try {
+      const res = await fetch("/api/contacts/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ people }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Reveal failed");
+      const results: Record<
+        string,
+        {
+          name: string;
+          linkedin: string;
+          email: string;
+          phone: string;
+          conf: ContactGroup["people"][number]["conf"];
+          revealStatus: "pending" | "unavailable";
+        }
+      > = data.results ?? {};
+
+      const next = contactGroupsRef.current.map((g) => ({
+        ...g,
+        people: g.people.map((p) => {
+          const r = p.id ? results[p.id] : undefined;
+          if (!r) return p;
+          return {
+            ...p,
+            name: r.name || p.name,
+            linkedin: r.linkedin || p.linkedin,
+            email: r.email || p.email,
+            phone: r.phone || p.phone,
+            conf: r.conf,
+            revealStatus: r.revealStatus,
+          };
+        }),
+      }));
+      contactGroupsRef.current = next;
+      setContactGroups(next);
+      setRevealStatus("idle");
+      pollReveals(next);
+    } catch (err) {
+      setRevealError(err instanceof Error ? err.message : "Reveal failed");
+      setRevealStatus("error");
     }
   };
 
@@ -257,7 +349,9 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         prev.map((g) => ({
           ...g,
           people: g.people.map((p) =>
-            p.revealStatus === "pending" ? { ...p, revealStatus: undefined } : p
+            p.revealStatus === "pending"
+              ? { ...p, revealStatus: undefined, conf: p.email ? p.conf : ("No email" as const) }
+              : p
           ),
         }))
       );
@@ -360,8 +454,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({
           seedName,
           answers,
-          targetTitles,
-          targetDepartments,
+          targetTitles: searchTitles().join(", "),
         }),
       });
       const data = await res.json();
@@ -374,7 +467,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const [checks, setChecks] = useState([false, false, false, false]);
+  const [checks, setChecks] = useState(REVIEW_CHECKS.map(() => false));
   const toggleCheck = (index: number) =>
     setChecks((prev) => prev.map((v, i) => (i === index ? !v : v)));
   const [launched, setLaunched] = useState(false);
@@ -398,7 +491,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          campaignName: `${seedName.split(" ")[0]} × freight brokers, EU`,
+          campaignName,
           steps: emails.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
             day,
             subject,
@@ -442,9 +535,10 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         setSeedWebsite,
         targetTitles,
         setTargetTitles,
-        targetDepartments,
-        toggleDepartment,
-        setTargetDepartments,
+        campaignName,
+        targetRoles,
+        toggleRole,
+        setTargetRoles,
         answers,
         setAnswer,
         caseStudyOptions,
@@ -468,10 +562,17 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         setRegion,
         picked,
         togglePicked,
+        setPickedMany,
         contactGroups,
         contactStatus,
         contactError,
         findContacts,
+        selectedContacts,
+        toggleContactSelected,
+        setContactsSelected,
+        revealStatus,
+        revealError,
+        revealSelected,
         removeContact,
         addContact,
         emails,

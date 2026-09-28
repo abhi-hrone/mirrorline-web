@@ -11,6 +11,12 @@ export default function ContactsPage() {
     contactStatus,
     contactError,
     findContacts,
+    selectedContacts,
+    toggleContactSelected,
+    setContactsSelected,
+    revealStatus,
+    revealError,
+    revealSelected,
     removeContact,
     addContact,
     companies,
@@ -18,13 +24,24 @@ export default function ContactsPage() {
   } = useWizard();
   const pickedCount = pickedCompanies(companies, picked).length;
   const totalContacts = contactGroups.reduce((n, g) => n + g.people.length, 0);
+  // Only contacts that came from a search (have an id) and don't have an email
+  // yet can be selected for reveal; revealed and manually added ones can't.
+  const revealable = (g: (typeof contactGroups)[number]) =>
+    g.people.flatMap((p) => (p.id && !p.email && p.revealStatus !== "pending" ? [p.id] : []));
+  const allRevealableIds = contactGroups.flatMap(revealable);
+  const selectedCount = allRevealableIds.filter((id) => selectedContacts[id]).length;
+  const revealedCount = contactGroups.reduce(
+    (n, g) => n + g.people.filter((p) => p.email).length,
+    0
+  );
 
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[980px] flex-col gap-4">
         <div className="flex flex-wrap items-center gap-3.5">
           <p className="text-sm text-[#6E6A5C]">
-            {totalContacts} contacts across {contactGroups.length} companies · Ocean
+            {totalContacts} contacts across {contactGroups.length} companies · {revealedCount} emails
+            revealed
           </p>
           <button
             onClick={findContacts}
@@ -32,16 +49,45 @@ export default function ContactsPage() {
             className="ml-auto cursor-pointer rounded-md bg-teal px-4 py-2 text-[12.5px] font-semibold text-paper disabled:opacity-60"
           >
             {contactStatus === "loading"
-              ? "Searching Ocean…"
+              ? "Searching…"
               : `Find contacts at ${pickedCount} ${pickedCount === 1 ? "company" : "companies"}`}
           </button>
         </div>
         {contactError && <p className="text-[13px] text-[#B3402A]">{contactError}</p>}
+        {contactGroups.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3.5 rounded-[10px] border border-line bg-white px-5 py-3">
+            <label className="flex cursor-pointer items-center gap-2 text-[13px] text-[#55513F]">
+              <input
+                type="checkbox"
+                className="size-4 cursor-pointer accent-teal"
+                checked={allRevealableIds.length > 0 && selectedCount === allRevealableIds.length}
+                disabled={allRevealableIds.length === 0}
+                onChange={(e) => setContactsSelected(allRevealableIds, e.target.checked)}
+              />
+              Select all
+            </label>
+            <span className="text-[12.5px] text-muted">
+              {selectedCount} selected · emails are only revealed for ticked contacts
+            </span>
+            <button
+              onClick={revealSelected}
+              disabled={revealStatus === "loading" || selectedCount === 0}
+              className="ml-auto cursor-pointer rounded-md bg-teal px-4 py-2 text-[12.5px] font-semibold text-paper disabled:opacity-60"
+            >
+              {revealStatus === "loading"
+                ? "Revealing…"
+                : `Reveal emails for ${selectedCount} selected`}
+            </button>
+            {revealError && (
+              <p className="basis-full text-[13px] text-[#B3402A]">{revealError}</p>
+            )}
+          </div>
+        )}
         {contactGroups.length === 0 && !contactError && (
           <p className="rounded-[10px] border border-line bg-white px-5 py-6 text-[13.5px] text-[#55513F]">
             {pickedCount === 0
               ? "No companies selected. Pick some on the Lookalikes step first."
-              : "Click “Find contacts” to search Ocean for people at the selected companies."}
+              : "Click “Find contacts” to list people at the selected companies. Emails are revealed in a second step, only for the contacts you tick."}
           </p>
         )}
 
@@ -59,7 +105,20 @@ export default function ContactsPage() {
                   {group.domain}
                 </div>
               </div>
-              <span className="ml-auto font-mono text-[11px] text-[#6E6A5C]">
+              <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11.5px] text-[#6E6A5C]">
+                <input
+                  type="checkbox"
+                  className="size-3.5 cursor-pointer accent-teal"
+                  checked={
+                    revealable(group).length > 0 &&
+                    revealable(group).every((id) => selectedContacts[id])
+                  }
+                  disabled={revealable(group).length === 0}
+                  onChange={(e) => setContactsSelected(revealable(group), e.target.checked)}
+                />
+                Select company
+              </label>
+              <span className="font-mono text-[11px] text-[#6E6A5C]">
                 {group.people.length} contacts
               </span>
               <span className="font-mono text-[11px] text-teal">
@@ -69,9 +128,19 @@ export default function ContactsPage() {
 
             {group.people.map((p, i) => (
               <div
-                key={`${p.name}-${p.email}-${i}`}
-                className="grid grid-cols-[minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,0.85fr)_60px_82px_28px] items-center gap-3.5 border-b border-[#F0EBE0] px-5 py-3"
+                key={p.id ?? `${p.name}-${i}`}
+                className="grid grid-cols-[18px_minmax(0,0.95fr)_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,0.85fr)_60px_82px_28px] items-center gap-3.5 border-b border-[#F0EBE0] px-5 py-3"
               >
+                <input
+                  type="checkbox"
+                  className="size-4 cursor-pointer accent-teal disabled:cursor-default"
+                  // Already revealed / manually added contacts show as ticked but
+                  // locked; pending ones are mid-reveal.
+                  checked={!!p.email || !!(p.id && selectedContacts[p.id])}
+                  disabled={!p.id || !!p.email || p.revealStatus === "pending"}
+                  onChange={() => p.id && toggleContactSelected(p.id)}
+                  title={p.email ? "Email already revealed" : `Reveal email for ${p.name}`}
+                />
                 <span className="min-w-0 overflow-hidden text-ellipsis text-[13.5px] font-semibold">
                   {p.name}
                 </span>

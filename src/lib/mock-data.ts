@@ -142,19 +142,23 @@ export const COMPANY_MATCH_DETAIL: Record<
   },
 };
 
-export type ContactConfidence = "Verified" | "Risky" | "Guessed" | "No email";
+export type ContactConfidence = "Verified" | "Risky" | "Guessed" | "No email" | "Not revealed";
 
 export const CONTACT_CONFIDENCE_STYLES: Record<ContactConfidence, string> = {
   Verified: "bg-[#E7F0EC] text-teal",
   Risky: "bg-[#F7E6DC] text-[#A0522D]",
   Guessed: "bg-[#F2EDDF] text-[#7A5B27]",
   "No email": "bg-[#EEEBE3] text-[#6E6A5C]",
+  "Not revealed": "bg-transparent text-[#9C978A]",
 };
 
 export type ContactGroup = {
   company: string;
   domain: string;
   score: number;
+  // Provider whose search produced these people's ids (e.g. "Apollo"); the
+  // reveal step needs it because ids only mean something to their issuer.
+  source?: string;
   people: {
     name: string;
     title: string;
@@ -296,9 +300,6 @@ export const INITIAL_SEQUENCE: SequenceStep[] = [
 
 export const REVIEW_CHECKS = [
   { label: "Quote and logo cleared for external use", note: "Confirmed by Priya on the case study record" },
-  { label: "Every claim traces to a filled field", note: "No invented metrics in the four steps" },
-  { label: "Contacts verified, risky addresses removed", note: "Stefan Auer excluded — risky" },
-  { label: "Referral credit split agreed", note: "Marcus 60 / Priya 40" },
 ];
 
 export const STATS = [

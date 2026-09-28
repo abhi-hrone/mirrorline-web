@@ -8,13 +8,6 @@ export default function CaseStudyPage() {
   const {
     answers,
     setAnswer,
-    seedWebsite,
-    caseStudyOptions,
-    caseStudyStatus,
-    caseStudyError,
-    selectedCaseStudyUrl,
-    findCaseStudies,
-    selectCaseStudy,
     caseContent,
     setCaseContent,
     fillStatus,
@@ -25,90 +18,6 @@ export default function CaseStudyPage() {
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[820px] flex-col gap-4">
-        <div className="flex flex-col gap-[14px] rounded-[10px] border border-line bg-white p-5 sm:p-6">
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-[10.5px] tracking-[0.13em] text-teal uppercase">
-              Find a case study
-            </span>
-            <span className="h-px flex-1 bg-[#E8E2D5]" />
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => findCaseStudies()}
-              disabled={caseStudyStatus === "loading"}
-              className="cursor-pointer rounded-md bg-teal px-[22px] py-3 text-sm font-semibold text-paper disabled:opacity-60"
-            >
-              {caseStudyStatus === "loading"
-                ? "Searching hrone.cloud…"
-                : "Search HROne case studies"}
-            </button>
-            <span className="text-[12.5px] text-muted">
-              Finds case studies relevant to{" "}
-              <span className="font-semibold">{seedWebsite || "the seed domain"}</span>.
-            </span>
-          </div>
-
-          {caseStudyStatus === "error" && (
-            <p className="text-[12.5px] text-[#A0522D]">{caseStudyError}</p>
-          )}
-
-          {caseStudyOptions.length > 0 && (
-            <div className="flex flex-col gap-3">
-              {caseStudyOptions.map((cs, i) => {
-                const selected = selectedCaseStudyUrl === cs.sourceUrl;
-                return (
-                  <div
-                    key={cs.sourceUrl || i}
-                    className={`flex flex-col gap-2 rounded-md border p-4 ${
-                      selected ? "border-teal bg-[#E7F0EC]" : "border-line bg-paper"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[13.5px] font-semibold">
-                        {cs.customerName}
-                        {cs.customerDomain ? (
-                          <span className="font-normal text-muted"> · {cs.customerDomain}</span>
-                        ) : null}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => selectCaseStudy(cs)}
-                        className="cursor-pointer rounded-md border border-teal px-3 py-1.5 text-[12.5px] font-semibold text-teal"
-                      >
-                        {selected ? "Selected — reapply" : "Use this case study"}
-                      </button>
-                    </div>
-                    {cs.benefits && (
-                      <p className="text-[13px] font-semibold text-teal">{cs.benefits}</p>
-                    )}
-                    {(cs.industry || cs.headcount || cs.locations) && (
-                      <p className="text-[12px] text-muted">
-                        {[cs.industry, cs.headcount, cs.locations].filter(Boolean).join(" · ")}
-                      </p>
-                    )}
-                    {cs.solution && (
-                      <p className="text-[12.5px] leading-relaxed text-[#4A4636]">
-                        {cs.solution}
-                      </p>
-                    )}
-                    {cs.sourceUrl && (
-                      <a
-                        href={cs.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[12px] text-muted underline"
-                      >
-                        {cs.sourceUrl}
-                      </a>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
         <div className="flex flex-col gap-[14px] rounded-[10px] border border-line bg-white p-5 sm:p-6">
           <div className="flex items-center gap-3">
             <span className="font-mono text-[10.5px] tracking-[0.13em] text-teal uppercase">

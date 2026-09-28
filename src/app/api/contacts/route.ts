@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { setPending } from "@/lib/reveal-store";
-import { getCachedContacts, saveContacts, getCachedReveals, saveReveal } from "@/lib/research-cache";
-import { apolloRevealEmail, apolloSearchPeople, toApolloLocations } from "@/lib/apollo";
-import { discolikeRevealEmail, discolikeSearchPeople } from "@/lib/discolike";
+import { getCachedContacts, saveContacts } from "@/lib/research-cache";
+import { apolloSearchPeople, toApolloLocations } from "@/lib/apollo";
+import { discolikeSearchPeople } from "@/lib/discolike";
 import { withFallbackTagged } from "@/lib/fallback";
-import { revealWebhookToken } from "@/lib/webhook-auth";
 import { createLogger, withRequestLog } from "@/lib/logger";
+import type { ContactConfidence } from "@/lib/contact-reveal";
 
 export const maxDuration = 120;
 
 const OCEAN_SEARCH_URL = "https://api.ocean.io/v3/search/people";
-const OCEAN_REVEAL_EMAILS_URL = "https://api.ocean.io/v2/reveal/emails";
-const OCEAN_REVEAL_PHONES_URL = "https://api.ocean.io/v2/reveal/phones";
 const MAX_COMPANIES = 15;
 const PEOPLE_PER_COMPANY = 5;
 // Only contacts located in these countries (ISO 3166-1 alpha-2).
@@ -30,7 +27,6 @@ type OceanPerson = {
 };
 
 type CompanyInput = { name: string; domain: string; score: number };
-type ContactConfidence = "Verified" | "Risky" | "Guessed" | "No email";
 type PersonOut = {
   name: string;
   title: string;
@@ -39,52 +35,7 @@ type PersonOut = {
   linkedin: string;
   conf: ContactConfidence;
   id: string | null;
-  revealStatus: "pending" | "unavailable";
 };
-
-// Kicks off an async email/phone reveal for a batch of people via Ocean's
-// Reveal Emails/Phones APIs (personIds come from the search results above).
-// Ocean delivers results later as webhook POSTs to our own
-// /api/contacts/reveal-webhook route, so this only works once APP_BASE_URL
-// points somewhere Ocean's servers can reach (not localhost). Returns whether
-// at least one of the two reveal requests was accepted.
-async function requestReveals(token: string, personIds: string[]): Promise<boolean> {
-  const base = process.env.APP_BASE_URL;
-  if (!base) {
-    log("Ocean reveal skipped: APP_BASE_URL is not set, so Ocean has no webhook to call back");
-    return false;
-  }
-  if (personIds.length === 0) return false;
-
-  const webhookToken = revealWebhookToken();
-  if (!webhookToken) {
-    log("Ocean reveal skipped: SECURITY_ACCESS_KEY is not set, so the webhook can't be authenticated");
-    return false;
-  }
-  const webhookUrl = `${base.replace(/\/$/, "")}/api/contacts/reveal-webhook?token=${webhookToken}`;
-  const headers = { "Content-Type": "application/json", "x-api-token": token };
-  const body = JSON.stringify({ personIds, webhookUrl });
-
-  try {
-    const [emailRes, phoneRes] = await Promise.all([
-      fetch(OCEAN_REVEAL_EMAILS_URL, { method: "POST", headers, body }),
-      fetch(OCEAN_REVEAL_PHONES_URL, { method: "POST", headers, body }),
-    ]);
-    if (!emailRes.ok) {
-      logger.error("Ocean reveal emails request failed", await emailRes.text(), { status: emailRes.status });
-    }
-    if (!phoneRes.ok) {
-      logger.error("Ocean reveal phones request failed", await phoneRes.text(), { status: phoneRes.status });
-    }
-    log(
-      `Ocean reveal request for ${personIds.length} people: emails=${emailRes.status}, phones=${phoneRes.status} -> webhook ${base.replace(/\/$/, "")}/api/contacts/reveal-webhook`
-    );
-    return emailRes.ok || phoneRes.ok;
-  } catch (err) {
-    logger.error("Ocean reveal request failed", err);
-    return false;
-  }
-}
 
 async function oceanSearchPeople(
   token: string,
@@ -130,7 +81,8 @@ async function apolloSearchPeopleForDomain(
   );
   return people.map((p) => ({
     id: p.id,
-    name: p.name ?? [p.first_name, p.last_name].filter(Boolean).join(" "),
+    name:
+      p.name ?? [p.first_name, p.last_name ?? p.last_name_obfuscated].filter(Boolean).join(" "),
     firstName: p.first_name,
     lastName: p.last_name,
     jobTitle: p.title,
@@ -231,7 +183,7 @@ export const POST = withRequestLog("contacts", async (req: NextRequest) => {
   }
   if (titles.length === 0 && departments.length === 0) {
     return NextResponse.json(
-      { error: "Pick at least one department or add a target title." },
+      { error: "Pick at least one target role or add a title keyword." },
       { status: 400 }
     );
   }
@@ -272,169 +224,21 @@ export const POST = withRequestLog("contacts", async (req: NextRequest) => {
         people: r.value.people.map((p): PersonOut => ({
           name: p.name ?? [p.firstName, p.lastName].filter(Boolean).join(" "),
           title: p.jobTitle ?? "",
-          // Ocean's people search returns no emails or phones; requestReveals()
-          // below asks Ocean to fill the rest in, keyed by this person's id.
+          // Search only returns who and what role. Emails are revealed in a
+          // second step, for just the contacts the user selects (see
+          // /api/contacts/reveal).
           email: "",
           phone: "",
           linkedin: p.linkedinUrl ?? "",
-          conf: "No email",
+          conf: "Not revealed",
           id: p.id ?? null,
-          revealStatus: "unavailable",
         })),
       },
     ];
   });
 
-  const revealTargets = groups.flatMap((g) =>
-    g.people.filter((p) => p.id).map((p) => ({ person: p, domain: g.domain, source: g.source }))
-  );
-
-  const cachedReveals = await getCachedReveals(revealTargets.map((t) => t.person.id as string)).catch(
-    (err) => {
-      logger.error("Reveal cache lookup failed", err);
-      return new Map<string, { status: string; email?: string; phone?: string }>();
-    }
-  );
-
   log(
-    `reveal: ${revealTargets.length} people with ids, ${cachedReveals.size} found in reveal cache`
-  );
-
-  // A cached "revealed" contact already has its final email/phone from a
-  // prior run — reuse it instead of spending another reveal credit.
-  // Anything not fully revealed yet (or never requested) gets a fresh ask.
-  const toRequest = revealTargets.filter(({ person: p }) => {
-    const cached = cachedReveals.get(p.id as string);
-    if (!cached || cached.status !== "revealed") return true;
-    p.email = cached.email ?? "";
-    p.phone = cached.phone ?? "";
-    p.conf = cached.email ? "Verified" : p.conf;
-    p.revealStatus = "unavailable";
-    return false;
-  });
-  log(
-    `reveal: ${revealTargets.length - toRequest.length} reused from cache, ${toRequest.length} need a fresh reveal`
-  );
-
-  const markRevealed = async (p: PersonOut, email: string) => {
-    p.email = email;
-    p.conf = "Verified";
-    await saveReveal(p.id as string, {
-      status: "revealed",
-      email,
-      emailDone: true,
-      phoneDone: false,
-    }).catch((err) => logger.error("Reveal cache save failed", err, { personId: p.id }));
-  };
-
-  // Step 1 — Apollo: synchronous per-person email match. For people Apollo
-  // itself found we match by Apollo id (their search results only carry a first
-  // name, so name + domain can't match); for people from another provider we
-  // fall back to name + domain (+ LinkedIn) matching.
-  // Apollo can reveal phones too, but only via its own async webhook, which
-  // isn't wired up here, so phone stays unrevealed on this path.
-  if (!apolloKey && toRequest.length > 0) log("reveal step 1/3 Apollo: skipped (APOLLO_API_KEY not set)");
-  else if (toRequest.length > 0) log(`reveal step 1/3 Apollo: matching ${toRequest.length} people`);
-  await Promise.all(
-    toRequest.map(async ({ person: p, domain, source }) => {
-      p.revealStatus = "unavailable";
-      if (!apolloKey) return;
-      const [firstName, ...rest] = p.name.trim().split(/\s+/);
-      const viaId = source === "Apollo" && !!p.id;
-      try {
-        const match = await apolloRevealEmail(apolloKey, {
-          id: viaId ? (p.id as string) : undefined,
-          first_name: firstName,
-          last_name: rest.join(" "),
-          domain,
-          linkedin_url: p.linkedin || undefined,
-        });
-        // The match carries the full name and LinkedIn URL that the search
-        // withheld, so the contact list shows more than a first name.
-        if (match.name && match.name.length > p.name.length) p.name = match.name;
-        if (match.linkedin_url && !p.linkedin) p.linkedin = match.linkedin_url;
-        const { email } = match;
-        if (email) await markRevealed(p, email);
-        logger.info(`  Apollo ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`, {
-          viaId,
-          matched: match.matched,
-          emailStatus: match.emailStatus,
-        });
-      } catch (err) {
-        logger.error(`  Apollo reveal failed for ${p.name} @ ${domain}`, err);
-      }
-    })
-  );
-
-  // Step 2 — Ocean fallback for anyone Apollo couldn't reveal. Ocean's reveal
-  // APIs only recognize person IDs that Ocean itself issued: sending Apollo/
-  // DiscoLike IDs makes Ocean "accept" the request (it queues the lookup
-  // regardless) while the webhook never delivers real data, silently starving
-  // those contacts forever. So only Ocean-sourced people go here. Ocean
-  // replies asynchronously via the reveal webhook, and also fills in phones.
-  const oceanTargets = oceanToken
-    ? toRequest.filter((t) => t.source === "Ocean" && !t.person.email)
-    : [];
-  if (toRequest.length > 0) {
-    const unrevealed = toRequest.filter((t) => !t.person.email);
-    log(
-      !oceanToken
-        ? `reveal step 2/3 Ocean: skipped (OCEAN_API_TOKEN not set), ${unrevealed.length} still without email`
-        : `reveal step 2/3 Ocean: ${unrevealed.length} still without email after Apollo, ` +
-            `${oceanTargets.length} of them Ocean-sourced (eligible), ` +
-            `${unrevealed.length - oceanTargets.length} not eligible (ids from another provider)`
-    );
-  }
-  const accepted =
-    oceanToken && oceanTargets.length > 0
-      ? await requestReveals(
-          oceanToken,
-          oceanTargets.map((t) => t.person.id as string)
-        )
-      : false;
-
-  if (accepted) {
-    await Promise.all(oceanTargets.map(({ person: p }) => setPending(p.id as string)));
-    oceanTargets.forEach(({ person: p }) => {
-      p.revealStatus = "pending";
-    });
-    log(`  Ocean accepted reveal for ${oceanTargets.length} people; results arrive via webhook`);
-  } else if (oceanTargets.length > 0) {
-    log(`  Ocean reveal NOT accepted for ${oceanTargets.length} people; they fall through to DiscoLike`);
-  }
-
-  // Step 3 — DiscoLike, last resort, for anyone still without an email and not
-  // waiting on an Ocean webhook.
-  const discolikeTargets = toRequest.filter(
-    ({ person: p }) => !p.email && p.revealStatus !== "pending"
-  );
-  if (discolikeTargets.length > 0) {
-    log(
-      discolikeKey
-        ? `reveal step 3/3 DiscoLike: trying ${discolikeTargets.length} people`
-        : `reveal step 3/3 DiscoLike: skipped (DISCOLIKE_API_KEY not set), ${discolikeTargets.length} stay without email`
-    );
-  }
-  if (discolikeKey) {
-    await Promise.all(
-      discolikeTargets.map(async ({ person: p, domain }) => {
-        try {
-          const { email } = await discolikeRevealEmail(discolikeKey, { name: p.name, domain });
-          if (email) await markRevealed(p, email);
-          log(`  DiscoLike ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`);
-        } catch (err) {
-          logger.error(`  DiscoLike reveal failed for ${p.name} @ ${domain}`, err);
-        }
-      })
-    );
-  }
-
-  const allPeople = groups.flatMap((g) => g.people);
-  log(
-    `done: ${groups.length} companies, ${allPeople.length} people | ` +
-      `emails=${allPeople.filter((p) => p.email).length}, ` +
-      `pending Ocean webhook=${allPeople.filter((p) => p.revealStatus === "pending").length}, ` +
-      `no email=${allPeople.filter((p) => !p.email && p.revealStatus !== "pending").length}`
+    `done: ${groups.length} companies, ${groups.reduce((n, g) => n + g.people.length, 0)} people found (no emails revealed)`
   );
 
   return NextResponse.json({ groups, failedCompanies: failures.length });

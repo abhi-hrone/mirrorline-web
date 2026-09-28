@@ -40,9 +40,9 @@ export default function TopNav() {
       </div>
 
       <div className="ml-auto flex items-center gap-2.5">
-        <span className="text-[12.5px] text-[#B5B0A1]">Abhishek Gupta</span>
+        <span className="text-[12.5px] text-[#B5B0A1]">User</span>
         <div className="grid h-[26px] w-[26px] place-items-center rounded-full bg-teal font-mono text-[10px] font-bold">
-          AG
+          U
         </div>
       </div>
     </div>

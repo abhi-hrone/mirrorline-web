@@ -4,7 +4,8 @@ import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { useWizard } from "@/lib/wizard-context";
 
-const SCORE_THRESHOLDS = [90, 80, 70];
+// 0 = no minimum, i.e. show every company the search returned.
+const SCORE_THRESHOLDS = [0, 90, 80, 70];
 
 export default function LookalikesPage() {
   const {
@@ -19,6 +20,7 @@ export default function LookalikesPage() {
     setRegion,
     picked,
     togglePicked,
+    setPickedMany,
   } = useWizard();
 
   // Load live results on first arrival; the ref keeps StrictMode from firing twice.
@@ -34,6 +36,10 @@ export default function LookalikesPage() {
     (c) => c.score >= minScore && (region === "All" || c.region === region)
   );
   const pickedCount = Object.values(picked).filter(Boolean).length;
+  // "Select all" acts on what's currently visible, so it respects the score
+  // and region filters instead of silently picking hidden companies.
+  const allVisiblePicked = filtered.length > 0 && filtered.every((c) => picked[c.id]);
+  const someVisiblePicked = filtered.some((c) => picked[c.id]);
 
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
@@ -61,7 +67,7 @@ export default function LookalikesPage() {
                       : "border-line bg-white text-[#55513F]"
                   }`}
                 >
-                  {t}+
+                  {t === 0 ? "All" : `${t}+`}
                 </button>
               ))}
             </div>
@@ -113,7 +119,23 @@ export default function LookalikesPage() {
 
         <div className="overflow-hidden rounded-[10px] border border-line bg-white">
           <div className="grid grid-cols-[34px_minmax(0,2fr)_76px_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.6fr)] gap-3.5 border-b border-[#E8E2D5] bg-paper px-[18px] py-[11px] font-mono text-[9.5px] tracking-[0.11em] text-muted uppercase">
-            <span />
+            <input
+              type="checkbox"
+              aria-label="Select all companies"
+              title={allVisiblePicked ? "Deselect all shown companies" : "Select all shown companies"}
+              className="size-[17px] cursor-pointer accent-teal disabled:cursor-default"
+              checked={allVisiblePicked}
+              ref={(el) => {
+                if (el) el.indeterminate = someVisiblePicked && !allVisiblePicked;
+              }}
+              disabled={filtered.length === 0}
+              onChange={(e) =>
+                setPickedMany(
+                  filtered.map((c) => c.id),
+                  e.target.checked
+                )
+              }
+            />
             <span>Company</span>
             <span>Score</span>
             <span>Headcount</span>

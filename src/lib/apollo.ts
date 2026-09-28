@@ -22,6 +22,8 @@ export type ApolloPerson = {
   name?: string;
   first_name?: string;
   last_name?: string;
+  // Search hides last names, returning e.g. "Sh***" instead.
+  last_name_obfuscated?: string;
   title?: string;
   linkedin_url?: string;
 };
