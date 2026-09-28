@@ -1,4 +1,4 @@
-import { getCachedReveal, saveReveal } from "@/lib/research-cache";
+import { getCachedReveal, saveReveal, saveRevealChannel } from "@/lib/research-cache";
 
 export type RevealResult = {
   status: "pending" | "revealed" | "unavailable";
@@ -30,27 +30,14 @@ export async function setPending(id: string) {
 // "revealed" now means at least one channel came back; pollReveals() in
 // wizard-context.tsx keeps polling the still-missing channel independently
 // until it arrives or its attempt budget runs out.
-async function markDone(
-  id: string,
-  doneKey: "emailDone" | "phoneDone",
-  patch: { email?: string; phone?: string }
-) {
-  // Start from Mongo, not just this instance's Map, so the other channel's
-  // webhook (handled by a different instance) isn't overwritten.
-  const prev: StoreEntry =
-    (await getCachedReveal(id).catch(() => null)) ?? store.get(id) ?? { status: "pending" };
-  const next: StoreEntry = { ...prev, ...patch, [doneKey]: true };
-  next.status = next.emailDone || next.phoneDone ? "revealed" : "pending";
-  store.set(id, next);
-  await saveReveal(id, next).catch((err) => console.error("Reveal cache save failed", err));
+export async function resolveEmail(id: string, email?: string) {
+  await saveRevealChannel(id, "email", email);
+  store.delete(id);
 }
 
-export function resolveEmail(id: string, email?: string) {
-  return markDone(id, "emailDone", { email });
-}
-
-export function resolvePhone(id: string, phone?: string) {
-  return markDone(id, "phoneDone", { phone });
+export async function resolvePhone(id: string, phone?: string) {
+  await saveRevealChannel(id, "phone", phone);
+  store.delete(id);
 }
 
 export async function getReveal(id: string): Promise<RevealResult | undefined> {

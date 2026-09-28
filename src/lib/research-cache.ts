@@ -123,3 +123,28 @@ export async function saveReveal(
     .collection<RevealDoc>("reveals")
     .updateOne({ _id: personId }, { $set: { ...data, updatedAt: new Date() } }, { upsert: true });
 }
+
+// Atomically records one channel's webhook result. Ocean's email and phone
+// webhooks arrive within milliseconds of each other, often on different
+// serverless instances, so a read-merge-write of the whole document lets the
+// later writer wipe the other channel's data. This only touches this
+// channel's fields; "revealed" means at least one channel has come back.
+export async function saveRevealChannel(
+  personId: string,
+  channel: "email" | "phone",
+  value?: string
+) {
+  const db = await getDb();
+  await db.collection<RevealDoc>("reveals").updateOne(
+    { _id: personId },
+    {
+      $set: {
+        status: "revealed",
+        [`${channel}Done`]: true,
+        ...(value ? { [channel]: value } : {}),
+        updatedAt: new Date(),
+      },
+    },
+    { upsert: true }
+  );
+}
