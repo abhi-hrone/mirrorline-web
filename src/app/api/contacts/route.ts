@@ -3,7 +3,7 @@ import { setPending } from "@/lib/reveal-store";
 import { getCachedContacts, saveContacts, getCachedReveals, saveReveal } from "@/lib/research-cache";
 import { apolloRevealEmail, apolloSearchPeople, toApolloLocations } from "@/lib/apollo";
 import { discolikeRevealEmail, discolikeSearchPeople } from "@/lib/discolike";
-import { withFallback } from "@/lib/fallback";
+import { withFallbackTagged } from "@/lib/fallback";
 
 export const maxDuration = 120;
 
@@ -14,6 +14,8 @@ const MAX_COMPANIES = 15;
 const PEOPLE_PER_COMPANY = 5;
 // Only contacts located in these countries (ISO 3166-1 alpha-2).
 const CONTACT_COUNTRIES = ["in"];
+
+const log = (msg: string) => console.log(`[contacts] ${msg}`);
 
 type OceanPerson = {
   id?: string;
@@ -45,7 +47,11 @@ type PersonOut = {
 // at least one of the two reveal requests was accepted.
 async function requestReveals(token: string, personIds: string[]): Promise<boolean> {
   const base = process.env.APP_BASE_URL;
-  if (!base || personIds.length === 0) return false;
+  if (!base) {
+    log("Ocean reveal skipped: APP_BASE_URL is not set, so Ocean has no webhook to call back");
+    return false;
+  }
+  if (personIds.length === 0) return false;
 
   const webhookUrl = `${base.replace(/\/$/, "")}/api/contacts/reveal-webhook`;
   const headers = { "Content-Type": "application/json", "x-api-token": token };
@@ -62,6 +68,9 @@ async function requestReveals(token: string, personIds: string[]): Promise<boole
     if (!phoneRes.ok) {
       console.error("Ocean reveal phones request failed", phoneRes.status, await phoneRes.text());
     }
+    log(
+      `Ocean reveal request for ${personIds.length} people: emails=${emailRes.status}, phones=${phoneRes.status} -> webhook ${webhookUrl}`
+    );
     return emailRes.ok || phoneRes.ok;
   } catch (err) {
     console.error("Ocean reveal request failed", err);
@@ -150,19 +159,23 @@ async function searchPeople(
   domain: string,
   titles: string[],
   departments: string[]
-): Promise<OceanPerson[]> {
+): Promise<{ source: string; people: OceanPerson[] }> {
   const cached = await getCachedContacts(domain, titles, departments).catch((err) => {
     console.error("Contacts cache lookup failed", err);
     return null;
   });
-  if (cached) return cached as OceanPerson[];
+  if (cached) {
+    log(`${domain}: search cache HIT (source=${cached.source}, ${cached.people.length} people)`);
+    return { source: cached.source, people: cached.people as OceanPerson[] };
+  }
+  log(`${domain}: search cache MISS, querying providers`);
 
-  const people = await withFallback([
-    oceanToken
-      ? { name: "Ocean", run: () => oceanSearchPeople(oceanToken, domain, titles, departments) }
-      : null,
+  const { name: source, value: people } = await withFallbackTagged([
     apolloKey
       ? { name: "Apollo", run: () => apolloSearchPeopleForDomain(apolloKey, domain, titles) }
+      : null,
+    oceanToken
+      ? { name: "Ocean", run: () => oceanSearchPeople(oceanToken, domain, titles, departments) }
       : null,
     discolikeKey
       ? {
@@ -172,11 +185,12 @@ async function searchPeople(
       : null,
   ]);
 
-  await saveContacts(domain, titles, departments, people).catch((err) =>
+  log(`${domain}: found ${people.length} people via ${source}`);
+  await saveContacts(domain, titles, departments, people, source).catch((err) =>
     console.error("Contacts cache save failed", err)
   );
 
-  return people;
+  return { source, people };
 }
 
 export async function POST(req: NextRequest) {
@@ -214,6 +228,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  log(
+    `request: ${companies.length} companies, titles=[${titles.join(", ")}], departments=[${departments.join(", ")}]; ` +
+      `providers configured: Apollo=${!!apolloKey}, Ocean=${!!oceanToken}, DiscoLike=${!!discolikeKey}`
+  );
+
   const results = await Promise.allSettled(
     companies.map((c) =>
       searchPeople(oceanToken, apolloKey, discolikeKey, c.domain, titles, departments)
@@ -231,16 +250,18 @@ export async function POST(req: NextRequest) {
   failures.forEach((f) =>
     console.error("People search failed for a company", (f as PromiseRejectedResult).reason)
   );
+  log(`search done: ${results.length - failures.length}/${results.length} companies succeeded`);
 
   const groups = companies.flatMap((c, i) => {
     const r = results[i];
-    if (r.status !== "fulfilled" || r.value.length === 0) return [];
+    if (r.status !== "fulfilled" || r.value.people.length === 0) return [];
     return [
       {
         company: c.name,
         domain: c.domain,
         score: c.score,
-        people: r.value.map((p): PersonOut => ({
+        source: r.value.source,
+        people: r.value.people.map((p): PersonOut => ({
           name: p.name ?? [p.firstName, p.lastName].filter(Boolean).join(" "),
           title: p.jobTitle ?? "",
           // Ocean's people search returns no emails or phones; requestReveals()
@@ -257,7 +278,7 @@ export async function POST(req: NextRequest) {
   });
 
   const revealTargets = groups.flatMap((g) =>
-    g.people.filter((p) => p.id).map((p) => ({ person: p, domain: g.domain }))
+    g.people.filter((p) => p.id).map((p) => ({ person: p, domain: g.domain, source: g.source }))
   );
 
   const cachedReveals = await getCachedReveals(revealTargets.map((t) => t.person.id as string)).catch(
@@ -265,6 +286,10 @@ export async function POST(req: NextRequest) {
       console.error("Reveal cache lookup failed", err);
       return new Map<string, { status: string; email?: string; phone?: string }>();
     }
+  );
+
+  log(
+    `reveal: ${revealTargets.length} people with ids, ${cachedReveals.size} found in reveal cache`
   );
 
   // A cached "revealed" contact already has its final email/phone from a
@@ -279,67 +304,117 @@ export async function POST(req: NextRequest) {
     p.revealStatus = "unavailable";
     return false;
   });
+  log(
+    `reveal: ${revealTargets.length - toRequest.length} reused from cache, ${toRequest.length} need a fresh reveal`
+  );
 
-  const accepted = oceanToken
-    ? await requestReveals(
-        oceanToken,
-        toRequest.map((t) => t.person.id as string)
-      )
-    : false;
+  const markRevealed = async (p: PersonOut, email: string) => {
+    p.email = email;
+    p.conf = "Verified";
+    await saveReveal(p.id as string, {
+      status: "revealed",
+      email,
+      emailDone: true,
+      phoneDone: false,
+    }).catch((err) => console.error("Reveal cache save failed", err));
+  };
+
+  // Step 1 — Apollo: synchronous per-person email match by name + domain (+
+  // LinkedIn), so it works regardless of which provider the search came from.
+  // Apollo can reveal phones too, but only via its own async webhook, which
+  // isn't wired up here, so phone stays unrevealed on this path.
+  if (!apolloKey && toRequest.length > 0) log("reveal step 1/3 Apollo: skipped (APOLLO_API_KEY not set)");
+  else if (toRequest.length > 0) log(`reveal step 1/3 Apollo: matching ${toRequest.length} people`);
+  await Promise.all(
+    toRequest.map(async ({ person: p, domain }) => {
+      p.revealStatus = "unavailable";
+      if (!apolloKey) return;
+      const [firstName, ...rest] = p.name.trim().split(/\s+/);
+      try {
+        const { email } = await apolloRevealEmail(apolloKey, {
+          first_name: firstName,
+          last_name: rest.join(" "),
+          domain,
+          linkedin_url: p.linkedin || undefined,
+        });
+        if (email) await markRevealed(p, email);
+        log(`  Apollo ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`);
+      } catch (err) {
+        console.error(`  Apollo reveal failed for ${p.name} @ ${domain}:`, err instanceof Error ? err.message : err);
+      }
+    })
+  );
+
+  // Step 2 — Ocean fallback for anyone Apollo couldn't reveal. Ocean's reveal
+  // APIs only recognize person IDs that Ocean itself issued: sending Apollo/
+  // DiscoLike IDs makes Ocean "accept" the request (it queues the lookup
+  // regardless) while the webhook never delivers real data, silently starving
+  // those contacts forever. So only Ocean-sourced people go here. Ocean
+  // replies asynchronously via the reveal webhook, and also fills in phones.
+  const oceanTargets = oceanToken
+    ? toRequest.filter((t) => t.source === "Ocean" && !t.person.email)
+    : [];
+  if (toRequest.length > 0) {
+    const unrevealed = toRequest.filter((t) => !t.person.email);
+    log(
+      !oceanToken
+        ? `reveal step 2/3 Ocean: skipped (OCEAN_API_TOKEN not set), ${unrevealed.length} still without email`
+        : `reveal step 2/3 Ocean: ${unrevealed.length} still without email after Apollo, ` +
+            `${oceanTargets.length} of them Ocean-sourced (eligible), ` +
+            `${unrevealed.length - oceanTargets.length} not eligible (ids from another provider)`
+    );
+  }
+  const accepted =
+    oceanToken && oceanTargets.length > 0
+      ? await requestReveals(
+          oceanToken,
+          oceanTargets.map((t) => t.person.id as string)
+        )
+      : false;
 
   if (accepted) {
-    toRequest.forEach(({ person: p }) => {
+    oceanTargets.forEach(({ person: p }) => {
       setPending(p.id as string);
       p.revealStatus = "pending";
     });
-  } else {
-    // Ocean's reveal request itself failed (or Ocean isn't configured) —
-    // fall back to a synchronous per-person email match, trying Apollo then
-    // DiscoLike. Both can reveal phone numbers too, but only via their own
-    // async webhooks, which aren't wired up here to keep this fallback
-    // simple, so phone stays unrevealed on this path.
+    log(`  Ocean accepted reveal for ${oceanTargets.length} people; results arrive via webhook`);
+  } else if (oceanTargets.length > 0) {
+    log(`  Ocean reveal NOT accepted for ${oceanTargets.length} people; they fall through to DiscoLike`);
+  }
+
+  // Step 3 — DiscoLike, last resort, for anyone still without an email and not
+  // waiting on an Ocean webhook.
+  const discolikeTargets = toRequest.filter(
+    ({ person: p }) => !p.email && p.revealStatus !== "pending"
+  );
+  if (discolikeTargets.length > 0) {
+    log(
+      discolikeKey
+        ? `reveal step 3/3 DiscoLike: trying ${discolikeTargets.length} people`
+        : `reveal step 3/3 DiscoLike: skipped (DISCOLIKE_API_KEY not set), ${discolikeTargets.length} stay without email`
+    );
+  }
+  if (discolikeKey) {
     await Promise.all(
-      toRequest.map(async ({ person: p, domain }) => {
-        p.revealStatus = "unavailable";
-        const [firstName, ...rest] = p.name.trim().split(/\s+/);
-        const lastName = rest.join(" ");
-
-        let email: string | undefined;
-        if (apolloKey) {
-          try {
-            email = (
-              await apolloRevealEmail(apolloKey, {
-                first_name: firstName,
-                last_name: lastName,
-                domain,
-                linkedin_url: p.linkedin || undefined,
-              })
-            ).email;
-          } catch (err) {
-            console.error("Apollo reveal fallback failed for", p.id, err);
-          }
-        }
-        if (!email && discolikeKey) {
-          try {
-            email = (await discolikeRevealEmail(discolikeKey, { name: p.name, domain })).email;
-          } catch (err) {
-            console.error("DiscoLike reveal fallback failed for", p.id, err);
-          }
-        }
-
-        if (email) {
-          p.email = email;
-          p.conf = "Verified";
-          await saveReveal(p.id as string, {
-            status: "revealed",
-            email,
-            emailDone: true,
-            phoneDone: false,
-          }).catch((err) => console.error("Reveal cache save failed", err));
+      discolikeTargets.map(async ({ person: p, domain }) => {
+        try {
+          const { email } = await discolikeRevealEmail(discolikeKey, { name: p.name, domain });
+          if (email) await markRevealed(p, email);
+          log(`  DiscoLike ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`);
+        } catch (err) {
+          console.error(`  DiscoLike reveal failed for ${p.name} @ ${domain}:`, err instanceof Error ? err.message : err);
         }
       })
     );
   }
+
+  const allPeople = groups.flatMap((g) => g.people);
+  log(
+    `done: ${groups.length} companies, ${allPeople.length} people | ` +
+      `emails=${allPeople.filter((p) => p.email).length}, ` +
+      `pending Ocean webhook=${allPeople.filter((p) => p.revealStatus === "pending").length}, ` +
+      `no email=${allPeople.filter((p) => !p.email && p.revealStatus !== "pending").length}`
+  );
 
   return NextResponse.json({ groups, failedCompanies: failures.length });
 }

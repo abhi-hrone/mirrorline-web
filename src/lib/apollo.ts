@@ -1,6 +1,6 @@
-// Fallback provider for Ocean: used only when Ocean's request itself fails
-// (bad response or thrown error), never as a primary source. See
-// /api/lookalikes and /api/contacts for where these are called.
+// Apollo is the primary provider for contact search/reveal (/api/contacts),
+// with Ocean as its fallback. /api/lookalikes still tries Ocean first and
+// uses Apollo as its fallback.
 
 const APOLLO_BASE_URL = "https://api.apollo.io/api/v1";
 

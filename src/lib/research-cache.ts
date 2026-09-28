@@ -12,6 +12,7 @@ type ContactsDoc = {
   titles: string[];
   departments: string[];
   people: unknown[];
+  source: string;
   fetchedAt: Date;
 };
 type RevealDoc = {
@@ -68,20 +69,24 @@ export async function getCachedContacts(domain: string, titles: string[], depart
   const db = await getDb();
   const key = contactsKey(domain, titles, departments);
   const doc = await db.collection<ContactsDoc>("contacts").findOne({ _id: key });
-  return doc?.people ?? null;
+  if (!doc) return null;
+  // Older cache entries predate the `source` field; treat them as Ocean's
+  // since Ocean was the only provider in use at the time they were written.
+  return { people: doc.people, source: doc.source ?? "Ocean" };
 }
 
 export async function saveContacts(
   domain: string,
   titles: string[],
   departments: string[],
-  people: unknown[]
+  people: unknown[],
+  source: string
 ) {
   const db = await getDb();
   const key = contactsKey(domain, titles, departments);
   await db.collection<ContactsDoc>("contacts").updateOne(
     { _id: key },
-    { $set: { _id: key, domain, titles, departments, people, fetchedAt: new Date() } },
+    { $set: { _id: key, domain, titles, departments, people, source, fetchedAt: new Date() } },
     { upsert: true }
   );
 }
