@@ -65,14 +65,23 @@ export async function saveCaseStudies(domain: string, caseStudies: unknown[]) {
     );
 }
 
+// Older cache entries predate the `source` field, and they are NOT all
+// Ocean's: the Apollo fallback was already live then and saved its results
+// under the same key. Guessing "Ocean" sent Apollo IDs to Ocean's reveal API,
+// which accepts them and then never delivers. The two providers' IDs are
+// easy to tell apart, though: Apollo's are 24-char hex (Mongo ObjectIds),
+// Ocean's are 16-char hex.
+function inferLegacySource(people: unknown[]): string {
+  const ids = people.map((p) => String((p as { id?: unknown })?.id ?? "")).filter(Boolean);
+  return ids.length > 0 && ids.every((id) => /^[0-9a-f]{24}$/i.test(id)) ? "Apollo" : "Ocean";
+}
+
 export async function getCachedContacts(domain: string, titles: string[], departments: string[]) {
   const db = await getDb();
   const key = contactsKey(domain, titles, departments);
   const doc = await db.collection<ContactsDoc>("contacts").findOne({ _id: key });
   if (!doc) return null;
-  // Older cache entries predate the `source` field; treat them as Ocean's
-  // since Ocean was the only provider in use at the time they were written.
-  return { people: doc.people, source: doc.source ?? "Ocean" };
+  return { people: doc.people, source: doc.source ?? inferLegacySource(doc.people) };
 }
 
 export async function saveContacts(

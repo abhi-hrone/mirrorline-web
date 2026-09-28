@@ -56,15 +56,33 @@ export async function apolloSearchPeople(
 // Apollo returns a matched person's email synchronously when
 // reveal_personal_emails is set. Phone reveal exists too, but only via
 // Apollo's own async webhook — not wired up here, so phone stays unrevealed
-// on this fallback path.
+// on this path.
+//
+// Pass `id` (from apolloSearchPeople) whenever you have it: the people search
+// only returns first names (last names come back obfuscated) and no LinkedIn
+// URL, so matching on name + domain alone finds nothing. Matching by id is
+// exact, and the response carries the full name and LinkedIn URL.
 export async function apolloRevealEmail(
   key: string,
-  person: { first_name?: string; last_name?: string; domain: string; linkedin_url?: string }
-): Promise<{ email?: string }> {
+  person: {
+    id?: string;
+    first_name?: string;
+    last_name?: string;
+    domain: string;
+    linkedin_url?: string;
+  }
+): Promise<{
+  email?: string;
+  matched: boolean;
+  emailStatus?: string;
+  name?: string;
+  linkedin_url?: string;
+}> {
   const res = await fetch(`${APOLLO_BASE_URL}/people/match`, {
     method: "POST",
     headers: apolloHeaders(key),
     body: JSON.stringify({
+      id: person.id,
       first_name: person.first_name,
       last_name: person.last_name,
       domain: person.domain,
@@ -75,8 +93,25 @@ export async function apolloRevealEmail(
   if (!res.ok) {
     throw new Error(`Apollo people/match returned ${res.status}: ${await res.text()}`);
   }
-  const data = (await res.json()) as { person?: { email?: string } };
-  return { email: data.person?.email };
+  const data = (await res.json()) as {
+    person?: {
+      email?: string;
+      email_status?: string;
+      name?: string;
+      linkedin_url?: string;
+    };
+  };
+  const match = data.person;
+  // Apollo answers with a placeholder address (email_not_unlocked@...) when
+  // it matched someone but has no revealable email — never a real contact.
+  const email = match?.email && !match.email.startsWith("email_not_unlocked") ? match.email : undefined;
+  return {
+    email,
+    matched: !!match,
+    emailStatus: match?.email_status,
+    name: match?.name,
+    linkedin_url: match?.linkedin_url,
+  };
 }
 
 export type ApolloOrganization = {

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { BUSINESS_DEPARTMENTS } from "./departments";
 import {
   CASE_QS,
@@ -195,6 +195,11 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     setPicked((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const [contactGroups, setContactGroups] = useState<ContactGroup[]>([]);
+  // Latest groups, readable from the polling timer without a stale closure.
+  const contactGroupsRef = useRef<ContactGroup[]>([]);
+  useEffect(() => {
+    contactGroupsRef.current = contactGroups;
+  }, [contactGroups]);
   const [contactStatus, setContactStatus] = useState<"idle" | "loading" | "error">("idle");
   const [contactError, setContactError] = useState<string | null>(null);
 
@@ -278,28 +283,31 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
           }
         > = data.results ?? {};
 
-        setContactGroups((prev) => {
-          const next = prev.map((g) => ({
-            ...g,
-            people: g.people.map((p) => {
-              const r = p.id ? results[p.id] : undefined;
-              if (!r) return p;
-              // Apply whichever channel has resolved so far — don't wait on
-              // the other one, it may never arrive. Only stop polling this
-              // contact once both channels are accounted for.
-              const bothDone = !!r.emailDone && !!r.phoneDone;
-              return {
-                ...p,
-                email: r.email || p.email,
-                phone: r.phone || p.phone,
-                conf: r.email ? ("Verified" as const) : p.conf,
-                revealStatus: bothDone ? undefined : p.revealStatus,
-              };
-            }),
-          }));
-          pollReveals(next, attempt + 1);
-          return next;
-        });
+        // Computed outside a setState updater on purpose: the next poll used to
+        // be scheduled from inside the updater, and React runs updaters twice
+        // in dev (StrictMode), so every round doubled the number of polling
+        // chains until the attempt cap.
+        const next = contactGroupsRef.current.map((g) => ({
+          ...g,
+          people: g.people.map((p) => {
+            const r = p.id ? results[p.id] : undefined;
+            if (!r) return p;
+            // Apply whichever channel has resolved so far — don't wait on
+            // the other one, it may never arrive. Only stop polling this
+            // contact once both channels are accounted for.
+            const bothDone = !!r.emailDone && !!r.phoneDone;
+            return {
+              ...p,
+              email: r.email || p.email,
+              phone: r.phone || p.phone,
+              conf: r.email ? ("Verified" as const) : p.conf,
+              revealStatus: bothDone ? undefined : p.revealStatus,
+            };
+          }),
+        }));
+        contactGroupsRef.current = next;
+        setContactGroups(next);
+        pollReveals(next, attempt + 1);
       } catch {
         pollReveals(groups, attempt + 1);
       }

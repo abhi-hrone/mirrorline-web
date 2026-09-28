@@ -327,26 +327,39 @@ export const POST = withRequestLog("contacts", async (req: NextRequest) => {
     }).catch((err) => logger.error("Reveal cache save failed", err, { personId: p.id }));
   };
 
-  // Step 1 — Apollo: synchronous per-person email match by name + domain (+
-  // LinkedIn), so it works regardless of which provider the search came from.
+  // Step 1 — Apollo: synchronous per-person email match. For people Apollo
+  // itself found we match by Apollo id (their search results only carry a first
+  // name, so name + domain can't match); for people from another provider we
+  // fall back to name + domain (+ LinkedIn) matching.
   // Apollo can reveal phones too, but only via its own async webhook, which
   // isn't wired up here, so phone stays unrevealed on this path.
   if (!apolloKey && toRequest.length > 0) log("reveal step 1/3 Apollo: skipped (APOLLO_API_KEY not set)");
   else if (toRequest.length > 0) log(`reveal step 1/3 Apollo: matching ${toRequest.length} people`);
   await Promise.all(
-    toRequest.map(async ({ person: p, domain }) => {
+    toRequest.map(async ({ person: p, domain, source }) => {
       p.revealStatus = "unavailable";
       if (!apolloKey) return;
       const [firstName, ...rest] = p.name.trim().split(/\s+/);
+      const viaId = source === "Apollo" && !!p.id;
       try {
-        const { email } = await apolloRevealEmail(apolloKey, {
+        const match = await apolloRevealEmail(apolloKey, {
+          id: viaId ? (p.id as string) : undefined,
           first_name: firstName,
           last_name: rest.join(" "),
           domain,
           linkedin_url: p.linkedin || undefined,
         });
+        // The match carries the full name and LinkedIn URL that the search
+        // withheld, so the contact list shows more than a first name.
+        if (match.name && match.name.length > p.name.length) p.name = match.name;
+        if (match.linkedin_url && !p.linkedin) p.linkedin = match.linkedin_url;
+        const { email } = match;
         if (email) await markRevealed(p, email);
-        log(`  Apollo ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`);
+        logger.info(`  Apollo ${email ? "revealed email for" : "found no email for"} ${p.name} @ ${domain}`, {
+          viaId,
+          matched: match.matched,
+          emailStatus: match.emailStatus,
+        });
       } catch (err) {
         logger.error(`  Apollo reveal failed for ${p.name} @ ${domain}`, err);
       }
