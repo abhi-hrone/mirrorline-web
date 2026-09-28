@@ -8,18 +8,18 @@ export type RevealResult = {
 
 type StoreEntry = RevealResult & { emailDone?: boolean; phoneDone?: boolean };
 
-// Module-level Map so lookups within a request/poll cycle are instant. Mongo
-// behind it is the durable copy: it survives a server restart and is what
-// lets a re-searched contact skip Ocean's reveal call entirely (see
-// getCachedReveal() used in /api/contacts).
+// Module-level Map so repeated lookups within one warm instance are instant.
+// Mongo behind it is the source of truth: on serverless (Vercel) the request
+// that queues a reveal, Ocean's webhook callbacks and the browser's status
+// polls can each land on a different instance, so an instance's Map may be
+// missing — or stale versus — what another instance already wrote.
 const store = new Map<string, StoreEntry>();
 
-export function setPending(id: string) {
-  if (!store.has(id)) {
-    const entry: StoreEntry = { status: "pending" };
-    store.set(id, entry);
-    saveReveal(id, entry).catch((err) => console.error("Reveal cache save failed", err));
-  }
+export async function setPending(id: string) {
+  if (store.has(id)) return;
+  const entry: StoreEntry = { status: "pending" };
+  store.set(id, entry);
+  await saveReveal(id, entry).catch((err) => console.error("Reveal cache save failed", err));
 }
 
 // Ocean sends emails and phones as two separate webhook calls that can land
@@ -30,31 +30,42 @@ export function setPending(id: string) {
 // "revealed" now means at least one channel came back; pollReveals() in
 // wizard-context.tsx keeps polling the still-missing channel independently
 // until it arrives or its attempt budget runs out.
-function markDone(id: string, doneKey: "emailDone" | "phoneDone", patch: { email?: string; phone?: string }) {
-  const prev = store.get(id) ?? { status: "pending" as const };
+async function markDone(
+  id: string,
+  doneKey: "emailDone" | "phoneDone",
+  patch: { email?: string; phone?: string }
+) {
+  // Start from Mongo, not just this instance's Map, so the other channel's
+  // webhook (handled by a different instance) isn't overwritten.
+  const prev: StoreEntry =
+    (await getCachedReveal(id).catch(() => null)) ?? store.get(id) ?? { status: "pending" };
   const next: StoreEntry = { ...prev, ...patch, [doneKey]: true };
   next.status = next.emailDone || next.phoneDone ? "revealed" : "pending";
   store.set(id, next);
-  saveReveal(id, next).catch((err) => console.error("Reveal cache save failed", err));
+  await saveReveal(id, next).catch((err) => console.error("Reveal cache save failed", err));
 }
 
 export function resolveEmail(id: string, email?: string) {
-  markDone(id, "emailDone", { email });
+  return markDone(id, "emailDone", { email });
 }
 
 export function resolvePhone(id: string, phone?: string) {
-  markDone(id, "phoneDone", { phone });
+  return markDone(id, "phoneDone", { phone });
 }
 
 export async function getReveal(id: string): Promise<RevealResult | undefined> {
   const inMemory = store.get(id);
-  if (inMemory) return inMemory;
+  // Only a fully resolved entry is safe to serve from this instance's Map;
+  // anything partial may already have been completed by another instance.
+  if (inMemory?.emailDone && inMemory?.phoneDone) return inMemory;
 
   const cached = await getCachedReveal(id).catch((err) => {
     console.error("Reveal cache lookup failed", err);
     return null;
   });
-  if (!cached) return undefined;
-  store.set(id, cached);
-  return cached;
+  if (cached) {
+    store.set(id, cached);
+    return cached;
+  }
+  return inMemory;
 }

@@ -4,6 +4,7 @@ import { getCachedContacts, saveContacts, getCachedReveals, saveReveal } from "@
 import { apolloRevealEmail, apolloSearchPeople, toApolloLocations } from "@/lib/apollo";
 import { discolikeRevealEmail, discolikeSearchPeople } from "@/lib/discolike";
 import { withFallbackTagged } from "@/lib/fallback";
+import { revealWebhookToken } from "@/lib/webhook-auth";
 
 export const maxDuration = 120;
 
@@ -53,7 +54,12 @@ async function requestReveals(token: string, personIds: string[]): Promise<boole
   }
   if (personIds.length === 0) return false;
 
-  const webhookUrl = `${base.replace(/\/$/, "")}/api/contacts/reveal-webhook`;
+  const webhookToken = revealWebhookToken();
+  if (!webhookToken) {
+    log("Ocean reveal skipped: SECURITY_ACCESS_KEY is not set, so the webhook can't be authenticated");
+    return false;
+  }
+  const webhookUrl = `${base.replace(/\/$/, "")}/api/contacts/reveal-webhook?token=${webhookToken}`;
   const headers = { "Content-Type": "application/json", "x-api-token": token };
   const body = JSON.stringify({ personIds, webhookUrl });
 
@@ -69,7 +75,7 @@ async function requestReveals(token: string, personIds: string[]): Promise<boole
       console.error("Ocean reveal phones request failed", phoneRes.status, await phoneRes.text());
     }
     log(
-      `Ocean reveal request for ${personIds.length} people: emails=${emailRes.status}, phones=${phoneRes.status} -> webhook ${webhookUrl}`
+      `Ocean reveal request for ${personIds.length} people: emails=${emailRes.status}, phones=${phoneRes.status} -> webhook ${base.replace(/\/$/, "")}/api/contacts/reveal-webhook`
     );
     return emailRes.ok || phoneRes.ok;
   } catch (err) {
@@ -373,8 +379,8 @@ export async function POST(req: NextRequest) {
       : false;
 
   if (accepted) {
+    await Promise.all(oceanTargets.map(({ person: p }) => setPending(p.id as string)));
     oceanTargets.forEach(({ person: p }) => {
-      setPending(p.id as string);
       p.revealStatus = "pending";
     });
     log(`  Ocean accepted reveal for ${oceanTargets.length} people; results arrive via webhook`);
