@@ -2,10 +2,43 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { useWizard } from "@/lib/wizard-context";
+import { pickedCompanies, useWizard } from "@/lib/wizard-context";
 
 // 0 = no minimum, i.e. show every company the search returned.
 const SCORE_THRESHOLDS = [0, 90, 80, 70];
+
+// Lower bound inclusive, upper exclusive.
+const HEADCOUNT_BANDS: { label: string; min: number; max: number }[] = [
+  { label: "All", min: 0, max: Infinity },
+  { label: "<200", min: 0, max: 200 },
+  { label: "200–1K", min: 200, max: 1000 },
+  { label: "1K–5K", min: 1000, max: 5000 },
+  { label: "5K+", min: 5000, max: Infinity },
+];
+
+// Headcount arrives as a plain count (Apollo: "1200"), a range (Ocean:
+// "201-500", "500000+") or "—". Ranges are bucketed by their lower bound.
+function parseHeadcount(size: string): number | null {
+  const m = size.replace(/,/g, "").match(/^\s*(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+function formatHeadcount(size: string) {
+  return /^\d+$/.test(size) ? Number(size).toLocaleString("en-IN") : size;
+}
+
+function inBand(size: string, bandLabel: string) {
+  const band = HEADCOUNT_BANDS.find((b) => b.label === bandLabel);
+  if (!band || band.label === "All") return true;
+  const n = parseHeadcount(size);
+  return n !== null && n >= band.min && n < band.max;
+}
+
+// Results cached before region names were normalized carry "IN" (Ocean) or
+// "INDIA" (Apollo) for the same country; fold them into one filter chip.
+function regionLabel(region: string) {
+  return /^(in|india)$/i.test(region) ? "India" : region;
+}
 
 export default function LookalikesPage() {
   const {
@@ -16,6 +49,8 @@ export default function LookalikesPage() {
     findLookalikes,
     minScore,
     setMinScore,
+    headcountBand,
+    setHeadcountBand,
     region,
     setRegion,
     picked,
@@ -31,11 +66,18 @@ export default function LookalikesPage() {
     findLookalikes();
   }, [companies.length, findLookalikes]);
 
-  const regions = ["All", ...Array.from(new Set(companies.map((c) => c.region)))];
+  const regions = ["All", ...Array.from(new Set(companies.map((c) => regionLabel(c.region))))];
+  // Defaults to India; if a search has no Indian companies at all, show
+  // everything rather than an empty table.
+  const activeRegion = regions.includes(region) ? region : "All";
   const filtered = companies.filter(
-    (c) => c.score >= minScore && (region === "All" || c.region === region)
+    (c) =>
+      c.score >= minScore &&
+      inBand(c.size, headcountBand) &&
+      (activeRegion === "All" || regionLabel(c.region) === activeRegion)
   );
-  const pickedCount = Object.values(picked).filter(Boolean).length;
+  const selected = pickedCompanies(companies, picked);
+  const pickedCount = selected.length;
   // "Select all" acts on what's currently visible, so it respects the score
   // and region filters instead of silently picking hidden companies.
   const allVisiblePicked = filtered.length > 0 && filtered.every((c) => picked[c.id]);
@@ -43,11 +85,12 @@ export default function LookalikesPage() {
 
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
-      <div className="flex max-w-[1180px] flex-col gap-[18px]">
+      <div className="grid max-w-[1480px] grid-cols-1 items-start gap-[18px] lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="flex min-w-0 flex-col gap-[18px]">
         <div className="flex flex-wrap items-center gap-[22px] rounded-[10px] border border-line bg-white px-5 py-4">
           <div>
             <div className="font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
-              Ocean seed
+              Seed
             </div>
             <div className="mt-1 text-[14.5px] font-semibold">{seedName}</div>
           </div>
@@ -74,6 +117,26 @@ export default function LookalikesPage() {
           </div>
           <div className="flex items-center gap-2.5">
             <span className="font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
+              Headcount
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {HEADCOUNT_BANDS.map((b) => (
+                <button
+                  key={b.label}
+                  onClick={() => setHeadcountBand(b.label)}
+                  className={`cursor-pointer rounded-md border px-3 py-1.5 font-mono text-xs ${
+                    headcountBand === b.label
+                      ? "border-ink bg-ink text-paper"
+                      : "border-line bg-white text-[#55513F]"
+                  }`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2.5">
+            <span className="font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
               Region
             </span>
             <div className="flex flex-wrap gap-1">
@@ -82,7 +145,7 @@ export default function LookalikesPage() {
                   key={r}
                   onClick={() => setRegion(r)}
                   className={`cursor-pointer rounded-md border px-3 py-1.5 text-xs ${
-                    region === r
+                    activeRegion === r
                       ? "border-ink bg-ink text-paper"
                       : "border-line bg-white text-[#55513F]"
                   }`}
@@ -101,7 +164,7 @@ export default function LookalikesPage() {
               disabled={lookalikeStatus === "loading"}
               className="cursor-pointer rounded-md bg-teal px-4 py-2 text-[12.5px] font-semibold text-paper disabled:opacity-60"
             >
-              {lookalikeStatus === "loading" ? "Searching Ocean…" : "Find lookalikes"}
+              {lookalikeStatus === "loading" ? "Searching…" : "Find lookalikes"}
             </button>
           </div>
         </div>
@@ -112,8 +175,8 @@ export default function LookalikesPage() {
         {companies.length === 0 && (
           <p className="rounded-[10px] border border-line bg-white px-5 py-6 text-[13.5px] text-[#55513F]">
             {lookalikeStatus === "loading"
-              ? "Searching Ocean for lookalikes…"
-              : "No lookalikes yet. Click “Find lookalikes” to search Ocean."}
+              ? "Searching for lookalikes…"
+              : "No lookalikes yet. Click “Find lookalikes” to search."}
           </p>
         )}
 
@@ -174,8 +237,8 @@ export default function LookalikesPage() {
                   >
                     {c.score}
                   </div>
-                  <div className="text-[13px] text-[#55513F]">{c.size}</div>
-                  <div className="text-[13px] text-[#55513F]">{c.region}</div>
+                  <div className="font-mono text-[13px] text-[#55513F]">{formatHeadcount(c.size)}</div>
+                  <div className="text-[13px] text-[#55513F]">{regionLabel(c.region)}</div>
                   <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-teal">
                     {c.fit || "—"}
                   </div>
@@ -197,7 +260,72 @@ export default function LookalikesPage() {
           </Link>
         </div>
       </div>
+
+      <SelectedPanel
+        selected={selected}
+        onRemove={togglePicked}
+        onClear={() => setPickedMany(selected.map((c) => c.id), false)}
+      />
+      </div>
     </div>
+  );
+}
+
+function SelectedPanel({
+  selected,
+  onRemove,
+  onClear,
+}: {
+  selected: { id: string; name: string }[];
+  onRemove: (id: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <aside className="flex flex-col rounded-[10px] border border-line bg-white lg:sticky lg:top-[92px] lg:max-h-[calc(100vh-120px)]">
+      <div className="flex items-center justify-between gap-3 border-b border-[#E8E2D5] px-4 py-3.5">
+        <div>
+          <div className="font-mono text-[10px] tracking-[0.12em] text-muted uppercase">
+            Selected
+          </div>
+          <div className="mt-0.5 text-[14.5px] font-semibold">
+            {selected.length} {selected.length === 1 ? "company" : "companies"}
+          </div>
+        </div>
+        {selected.length > 0 && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="cursor-pointer text-xs text-muted underline"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+      {selected.length === 0 ? (
+        <p className="px-4 py-5 text-[12.5px] text-muted">
+          Tick companies in the table and they&apos;ll show up here.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5 overflow-y-auto px-4 py-3.5">
+          {selected.map((c) => (
+            <span
+              key={c.id}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-teal/30 bg-[#E7F0EC] py-1 pr-1.5 pl-3 text-xs text-teal"
+            >
+              <span className="truncate">{c.name}</span>
+              <button
+                type="button"
+                onClick={() => onRemove(c.id)}
+                aria-label={`Remove ${c.name}`}
+                className="grid h-4 w-4 flex-none cursor-pointer place-items-center rounded-full text-[13px] leading-none hover:bg-teal hover:text-paper"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </aside>
   );
 }
 

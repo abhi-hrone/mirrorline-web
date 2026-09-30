@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import PageHeader from "@/components/PageHeader";
 import WizardStepper from "@/components/WizardStepper";
+import WizardBackLink from "@/components/WizardBackLink";
 import { WizardProvider } from "@/lib/wizard-context";
 import { WIZARD_META, WizardStepKey } from "@/lib/mock-data";
 
@@ -24,6 +25,7 @@ export default function NewCampaignLayout({
           right={<WizardStepper />}
         />
       )}
+      <WizardBackLink />
       {children}
     </WizardProvider>
   );

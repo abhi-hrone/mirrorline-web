@@ -122,6 +122,9 @@ export type ApolloOrganization = {
   primary_domain?: string;
   website_url?: string;
   country?: string;
+  // HQ country. Accounts imported from a CRM carry the CRM's own `country`,
+  // which can disagree with this (or be blank), so prefer this one.
+  organization_country?: string;
   estimated_num_employees?: number;
 };
 
@@ -163,6 +166,55 @@ export async function apolloSearchLookalikeCompanies(
     accounts?: ApolloOrganization[];
   };
   return [...(data.organizations ?? []), ...(data.accounts ?? [])];
+}
+
+const BULK_ENRICH_BATCH = 10; // Apollo's per-request maximum.
+const BULK_ENRICH_CONCURRENCY = 3;
+
+// Company search (mixed_companies/search) never returns an employee count,
+// so headcount has to come from enrichment. Costs 1 Apollo credit per
+// company — callers should pass only the domains that are actually missing
+// a headcount. Returns domain -> employee count for the ones Apollo knew.
+export async function apolloBulkEnrichHeadcounts(
+  key: string,
+  domains: string[]
+): Promise<Map<string, number>> {
+  const batches: string[][] = [];
+  for (let i = 0; i < domains.length; i += BULK_ENRICH_BATCH) {
+    batches.push(domains.slice(i, i + BULK_ENRICH_BATCH));
+  }
+
+  const counts = new Map<string, number>();
+  const runBatch = async (batch: string[]) => {
+    const res = await fetch(`${APOLLO_BASE_URL}/organizations/bulk_enrich`, {
+      method: "POST",
+      headers: apolloHeaders(key),
+      body: JSON.stringify({ domains: batch }),
+    });
+    if (!res.ok) {
+      throw new Error(`Apollo bulk enrich returned ${res.status}: ${await res.text()}`);
+    }
+    const data = (await res.json()) as { organizations?: (ApolloOrganization | null)[] };
+    // Results come back in request order, with null for domains Apollo
+    // doesn't know — but match on domain anyway rather than trusting order.
+    (data.organizations ?? []).forEach((o, i) => {
+      if (!o?.estimated_num_employees) return;
+      const domain = domainFromApolloOrg(o) ?? batch[i];
+      counts.set(domain.toLowerCase(), o.estimated_num_employees);
+      counts.set(batch[i].toLowerCase(), o.estimated_num_employees);
+    });
+  };
+
+  // Keep whatever batches succeed; only fail outright if none did.
+  const failures: unknown[] = [];
+  for (let i = 0; i < batches.length; i += BULK_ENRICH_CONCURRENCY) {
+    const results = await Promise.allSettled(
+      batches.slice(i, i + BULK_ENRICH_CONCURRENCY).map(runBatch)
+    );
+    results.forEach((r) => r.status === "rejected" && failures.push(r.reason));
+  }
+  if (batches.length > 0 && failures.length === batches.length) throw failures[0];
+  return counts;
 }
 
 export function domainFromApolloOrg(o: ApolloOrganization): string | null {

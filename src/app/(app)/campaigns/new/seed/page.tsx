@@ -95,12 +95,18 @@ export default function SeedPage() {
                         key={r}
                         type="button"
                         onClick={() => toggleRole(r)}
-                        className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs ${
+                        aria-pressed={on}
+                        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs ${
                           on
                             ? "border-ink bg-ink text-paper"
                             : "border-line bg-white text-[#55513F]"
                         }`}
                       >
+                        {on && (
+                          <span aria-hidden className="text-[11px] leading-none text-[#4ADE80]">
+                            ✓
+                          </span>
+                        )}
                         {r}
                       </button>
                     );

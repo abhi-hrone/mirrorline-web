@@ -49,6 +49,8 @@ type WizardState = {
 
   minScore: number;
   setMinScore: (v: number) => void;
+  headcountBand: string;
+  setHeadcountBand: (v: string) => void;
   region: string;
   setRegion: (v: string) => void;
   picked: Record<string, boolean>;
@@ -205,7 +207,8 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   };
 
   const [minScore, setMinScore] = useState(0);
-  const [region, setRegion] = useState("All");
+  const [headcountBand, setHeadcountBand] = useState("All");
+  const [region, setRegion] = useState("India");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const togglePicked = (id: string) =>
     setPicked((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -492,6 +495,8 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           campaignName,
+          seedName,
+          seedWebsite,
           steps: emails.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
             day,
             subject,
@@ -558,6 +563,8 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         findLookalikes,
         minScore,
         setMinScore,
+        headcountBand,
+        setHeadcountBand,
         region,
         setRegion,
         picked,

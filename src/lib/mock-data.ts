@@ -12,7 +12,7 @@ export type WizardStepKey = (typeof WIZARD_STEPS)[number]["key"];
 export const WIZARD_META: Record<WizardStepKey, { crumb: string; title: string }> = {
   seed: { crumb: "New campaign · 1 of 6", title: "Which customer are we cloning?" },
   case: { crumb: "New campaign · 2 of 6", title: "Case study record" },
-  lookalikes: { crumb: "New campaign · 3 of 6", title: "Ocean lookalikes" },
+  lookalikes: { crumb: "New campaign · 3 of 6", title: "Lookalikes" },
   contacts: { crumb: "New campaign · 4 of 6", title: "Contacts" },
   sequence: { crumb: "New campaign · 5 of 6", title: "Sequence draft" },
   review: { crumb: "New campaign · 6 of 6", title: "Review & approve" },
@@ -302,19 +302,21 @@ export const REVIEW_CHECKS = [
   { label: "Quote and logo cleared for external use", note: "Confirmed by Priya on the case study record" },
 ];
 
-export const STATS = [
-  { label: "Live campaigns", value: "6", note: "from 4 customers" },
-  { label: "Case studies", value: "11", note: "3 awaiting sign-off" },
-  { label: "Reply rate", value: "9.4%", note: "vs 3.1% cold" },
-  { label: "Referral payouts", value: "₹45k", note: "3 closed-won" },
-];
-
-export type CampaignStatus = "Sending" | "In review" | "Draft";
+export type CampaignStatus =
+  | "Sending"
+  | "In review"
+  | "Draft"
+  | "Paused"
+  | "Stopped"
+  | "Completed";
 
 export const STATUS_STYLES: Record<CampaignStatus, string> = {
   Sending: "bg-[#E7F0EC] text-teal",
   "In review": "bg-[#F2EDDF] text-[#7A5B27]",
   Draft: "bg-canvas text-[#6E6A5C]",
+  Paused: "bg-[#F2EDDF] text-[#7A5B27]",
+  Stopped: "bg-canvas text-[#6E6A5C]",
+  Completed: "bg-[#E7F0EC] text-teal",
 };
 
 export const INTEGRATIONS: {
@@ -347,50 +349,3 @@ export const INTEGRATION_STATE_STYLES: Record<"Connected" | "Pending", string> =
   Connected: "bg-[#E7F0EC] text-teal",
   Pending: "bg-[#F2EDDF] text-[#7A5B27]",
 };
-
-export const CAMPAIGNS: {
-  name: string;
-  seed: string;
-  owner: string;
-  targets: string;
-  replies: string;
-  status: CampaignStatus;
-  openStep: WizardStepKey;
-}[] = [
-  {
-    name: "Veldhoven × freight brokers, EU",
-    seed: "Veldhoven Freight",
-    owner: "Marcus · Priya",
-    targets: "41",
-    replies: "6",
-    status: "Sending",
-    openStep: "review",
-  },
-  {
-    name: "Harbourline × UK 3PL",
-    seed: "Harbourline Group",
-    owner: "Sana · Priya",
-    targets: "58",
-    replies: "4",
-    status: "Sending",
-    openStep: "review",
-  },
-  {
-    name: "Nordkapp × cold chain",
-    seed: "Nordkapp Cold Chain",
-    owner: "Marcus · Dev",
-    targets: "22",
-    replies: "0",
-    status: "In review",
-    openStep: "review",
-  },
-  {
-    name: "Harbourline × Irish depots",
-    seed: "Harbourline Group",
-    owner: "Sana",
-    targets: "—",
-    replies: "—",
-    status: "Draft",
-    openStep: "case",
-  },
-];

@@ -43,6 +43,10 @@ export const HR_ROLE_GROUPS: { level: string; roles: string[] }[] = [
       "Human resource Business Partner",
     ],
   },
+  {
+    level: "Generic",
+    roles: ["HR", "Director"],
+  },
 ];
 
 export const ALL_HR_ROLES: string[] = HR_ROLE_GROUPS.flatMap((g) => g.roles);

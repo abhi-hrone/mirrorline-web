@@ -1,6 +1,6 @@
 # Cost reference
 
-What this app actually spends money on, and where. Two sources: Azure OpenAI (drafting sequences) and Smartlead (sending them). Ocean.io (lookalikes + contacts) isn't covered here since it isn't scoped for this doc — ask if you want it added too. Prices as published by each vendor as of **September 2026**; re-check before budgeting, since SaaS/API pricing changes without notice.
+What this app actually spends money on, and where. Three sources: Azure OpenAI (drafting sequences), Smartlead (sending them), and Apollo (company headcounts on the Lookalikes step). Ocean.io and the rest of Apollo's usage (lookalike search, contact search and reveal) aren't covered here yet — ask if you want them added too. Prices as published by each vendor as of **September 2026**; re-check before budgeting, since SaaS/API pricing changes without notice.
 
 ## 1. Sequence generation (Azure OpenAI)
 
@@ -92,9 +92,42 @@ Smartlead's own lead-finder ("SmartProspect", Engage → Prospect Finder in the 
 - **1 credit = 1 verified contact revealed.** Your Smartlead plan tier sets the monthly credit allowance (matches the plan's contact cap — e.g. Pro's 30,000).
 - **Dashboard-only.** As of September 2026 there is no documented `/prospects` or `/smartprospect` REST endpoint — it can't be called from this app's API routes the way `/api/lookalikes` and `/api/contacts` call Ocean.io. If SmartProspect ships an API later, it'd be the natural replacement for Ocean.io; until then those two routes stay as they are.
 
+## 3. Company headcount (Apollo)
+
+### Why this costs anything
+
+The Lookalikes step shows each company's headcount and lets you filter by it. [`/api/lookalikes`](../src/app/api/lookalikes/route.ts) tries Ocean first, then Apollo, then DiscoLike. Ocean returns a size band with each company; **Apollo's company search does not return an employee count at all** (`estimated_num_employees` is always empty in its search results). So whenever a company comes back without a headcount, the route looks it up with Apollo's [Bulk Organization Enrichment](https://docs.apollo.io/reference/bulk-organization-enrichment) endpoint (`apolloBulkEnrichHeadcounts` in [`lib/apollo.ts`](../src/lib/apollo.ts)).
+
+| | |
+|---|---|
+| **Price** | **1 Apollo credit per company** looked up (Apollo's API docs) |
+| **Batching** | Up to 10 companies per request — batching cuts the number of calls, not the number of credits |
+| **Who gets looked up** | Only companies returned **without** a headcount. Ocean results normally already have one, so a search Ocean answers costs ~0 credits here |
+
+### Per search
+
+| Scenario | Credits |
+|---|---|
+| Ocean answers the search | ~0 (only any Ocean companies missing a size) |
+| Apollo answers the search (Ocean failed/unavailable) — the common case as of September 2026 | **~1 per company returned, up to 100** (the search is capped at 100 companies) |
+| Re-opening a seed already searched | **0** — results, including headcounts, are cached in Mongo per seed domain. Each company is marked once it's been looked up, so companies Apollo has no headcount for aren't re-billed on every visit |
+| Clicking **"Find lookalikes"** again for the same seed | 0 — the cache answers it, same as above |
+
+### One-time backfill of searches cached before this change
+
+Seeds searched before headcount lookups existed get enriched **once**, the first time each seed is opened again. As of 29 September 2026 the cache held 5 such seeds (hrone.cloud, obeetee.in, uber.com, adidas.com, manavrachna.edu.in), all answered by Apollo with no headcounts — **~479 credits in total** if every one of them is reopened.
+
+### What a credit costs you
+
+Apollo doesn't publish per-credit prices on its pricing page — credits come bundled with each seat's plan, and top-up prices are shown in the Apollo billing screen once you're a customer. Check **Settings → Plans & billing** in Apollo for your plan's monthly credit allowance and the top-up price. Credits are shared with everything else this app does on Apollo (contact reveals on the Contacts step spend credits too), so heavy lookalike use competes with reveals for the same allowance.
+
+**Practical takeaway:** at ~100 credits per brand-new seed on Apollo, this is the most credit-hungry thing on the Lookalikes step. Getting Ocean working again as the primary lookalike provider would bring it close to zero, since Ocean already returns size bands.
+
 ## Sources
 
 - [Azure OpenAI Service pricing](https://azure.microsoft.com/en-us/pricing/details/azure-openai/)
+- [Apollo — Bulk Organization Enrichment API](https://docs.apollo.io/reference/bulk-organization-enrichment)
+- [Apollo — Organization Enrichment API](https://docs.apollo.io/reference/organization-enrichment)
 - [Smartlead pricing](https://www.smartlead.ai/pricing)
 - [Smartlead pricing plans — help center](https://helpcenter.smartlead.ai/en/articles/439-smartlead-pricing-plans)
 - [Full API documentation — help center](https://helpcenter.smartlead.ai/en/articles/125-full-api-documentation)

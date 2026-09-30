@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withRequestLog } from "@/lib/logger";
+import { saveLaunchedCampaign } from "@/lib/campaigns";
 
 export const maxDuration = 60;
 
@@ -93,6 +94,8 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
   const campaignName = typeof body.campaignName === "string" ? body.campaignName.trim() : "";
   const steps: StepIn[] = Array.isArray(body.steps) ? body.steps : [];
   const groups: GroupIn[] = Array.isArray(body.groups) ? body.groups : [];
+  const seedName = typeof body.seedName === "string" ? body.seedName.trim() : "";
+  const seedWebsite = typeof body.seedWebsite === "string" ? body.seedWebsite.trim() : "";
 
   if (!campaignName) {
     console.error("Smartlead launch rejected: campaignName missing", { body });
@@ -159,6 +162,18 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
         { status: 502 }
       );
     }
+
+    // Record the seed customer so the campaigns list can show it — Smartlead
+    // has no field for it. Best-effort: a Mongo hiccup shouldn't fail a launch
+    // that Smartlead already accepted.
+    await saveLaunchedCampaign({
+      _id: campaignId,
+      name: campaignName,
+      seedName,
+      seedWebsite,
+      companies: groups.length,
+      steps: steps.length,
+    }).catch((err) => console.error("Campaign metadata save failed", campaignId, err));
 
     // 2. Push the sequence steps.
     const delays = toStepDelays(steps);

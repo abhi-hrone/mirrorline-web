@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { normalizeDomain } from "@/lib/domain";
 import { getCachedLookalikes, saveLookalikes } from "@/lib/research-cache";
 import {
+  apolloBulkEnrichHeadcounts,
   apolloEnrichOrganization,
   apolloSearchLookalikeCompanies,
   domainFromApolloOrg,
@@ -29,7 +30,9 @@ const COMPANY_SIZES = [
     "500000+"
 ]
 
+// Keys are ISO codes (Ocean) or lower-cased country names (Apollo, DiscoLike).
 const REGION_BY_COUNTRY: Record<string, string> = {
+  in: "India", india: "India",
   nl: "Benelux", be: "Benelux", lu: "Benelux",
   de: "DACH", at: "DACH", ch: "DACH",
   se: "Nordics", no: "Nordics", dk: "Nordics", fi: "Nordics", is: "Nordics",
@@ -52,7 +55,40 @@ type Company = {
   size: string;
   region: string;
   fit: string;
+  // Set once Apollo enrichment has been tried for this company, so a cached
+  // search whose headcount Apollo doesn't know isn't re-billed on every load.
+  sizeChecked?: boolean;
 };
+
+const NO_SIZE = "—";
+
+// Fills in headcount for companies the provider returned without one (all
+// of Apollo's, since its company search has no employee count). 1 Apollo
+// credit per company looked up — see docs/costs.md. Never fails the search:
+// on error the companies come back unchanged and unmarked, to retry later.
+async function fillHeadcounts(apolloKey: string | undefined, companies: Company[]) {
+  const missing = companies.filter((c) => c.size === NO_SIZE && !c.sizeChecked);
+  if (!apolloKey || missing.length === 0) return { companies, changed: false };
+
+  try {
+    const counts = await apolloBulkEnrichHeadcounts(
+      apolloKey,
+      missing.map((c) => c.domain)
+    );
+    log.info("Headcounts enriched", { requested: missing.length, found: counts.size });
+    return {
+      changed: true,
+      companies: companies.map((c) => {
+        if (c.size !== NO_SIZE || c.sizeChecked) return c;
+        const n = counts.get(c.domain.toLowerCase());
+        return { ...c, size: n ? String(n) : NO_SIZE, sizeChecked: true };
+      }),
+    };
+  } catch (err) {
+    log.error("Headcount enrichment failed", err, { requested: missing.length });
+    return { companies, changed: false };
+  }
+}
 
 function regionFor(country: string): string {
   const c = country.toLowerCase();
@@ -95,7 +131,7 @@ async function oceanLookalikes(token: string, domain: string): Promise<Company[]
         name: c.name ?? c.domain,
         domain: c.domain,
         score,
-        size: c.companySize ?? c.employeeCountOcean ?? "—",
+        size: c.companySize ?? c.employeeCountOcean ?? NO_SIZE,
         region: regionFor(country),
         fit: "",
       },
@@ -136,8 +172,8 @@ async function apolloLookalikes(key: string, domain: string): Promise<Company[]>
         // Apollo doesn't return a relevance score like Ocean's A/B/C — it
         // already ranks by similarity, so approximate one from result order.
         score: Math.max(60, 90 - i),
-        size: o.estimated_num_employees ? String(o.estimated_num_employees) : "—",
-        region: regionFor(o.country ?? ""),
+        size: o.estimated_num_employees ? String(o.estimated_num_employees) : NO_SIZE,
+        region: regionFor(o.organization_country || o.country || ""),
         fit: "",
       },
     ];
@@ -162,7 +198,7 @@ async function discolikeLookalikes(key: string, domain: string): Promise<Company
         domain: c.domain,
         // DiscoLike's similarity score is 0-100 like Ocean's, when present.
         score: c.similarity ?? Math.max(60, 90 - i),
-        size: c.employees ?? "—",
+        size: c.employees ?? NO_SIZE,
         region: regionFor(c.address?.country ?? ""),
         fit: "",
       },
@@ -201,7 +237,14 @@ export const POST = withRequestLog("lookalikes", async (req: NextRequest) => {
     return null;
   });
   if (cached) {
-    return NextResponse.json({ companies: cached, cached: true });
+    // Searches cached before headcount enrichment existed get backfilled once.
+    const filled = await fillHeadcounts(apolloKey, cached as Company[]);
+    if (filled.changed) {
+      await saveLookalikes(domain, filled.companies).catch((err) =>
+        log.error("Lookalikes cache save failed", err, { domain })
+      );
+    }
+    return NextResponse.json({ companies: filled.companies, cached: true });
   }
 
   let companies: Company[];
@@ -220,6 +263,8 @@ export const POST = withRequestLog("lookalikes", async (req: NextRequest) => {
       { status: 502 }
     );
   }
+
+  companies = (await fillHeadcounts(apolloKey, companies)).companies;
 
   await saveLookalikes(domain, companies).catch((err) =>
     log.error("Lookalikes cache save failed", err, { domain })
