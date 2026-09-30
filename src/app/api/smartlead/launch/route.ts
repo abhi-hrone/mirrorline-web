@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withRequestLog } from "@/lib/logger";
 import { saveLaunchedCampaign } from "@/lib/campaigns";
+import { emailParagraphs } from "@/lib/email-render";
 
 export const maxDuration = 60;
 
@@ -34,20 +35,15 @@ function toSmartleadTokens(text: string) {
 }
 
 function toEmailBody(step: StepIn) {
-  const paragraphs = [step.hook, step.content, step.cta, step.ps && `P.S. ${step.ps}`]
-    .filter(Boolean)
-    .map((p) => `<p>${toSmartleadTokens(p as string)}</p>`)
+  const paragraphs = emailParagraphs(step)
+    .map((p) => `<p>${toSmartleadTokens(p)}</p>`)
     .join("");
-  // The generator deliberately keeps "hook" specific rather than a greeting
-  // (see /api/sequence's system prompt), so every email reads as a template
-  // with no salutation at all — prepend a plain "Hi {{first_name}}," here,
-  // guaranteed regardless of what the model drafted.
   // The preheader rides as a hidden first line so inboxes show it as the
   // preview text instead of repeating the opening sentence.
   const preheader = step.preheader
     ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${toSmartleadTokens(step.preheader)}</div>`
     : "";
-  return `${preheader}<p>Hi {{first_name}},</p>${paragraphs}`;
+  return `${preheader}${paragraphs}`;
 }
 
 function parseDay(day: string) {

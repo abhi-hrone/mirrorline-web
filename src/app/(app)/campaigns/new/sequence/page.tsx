@@ -1,25 +1,153 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useWizard } from "@/lib/wizard-context";
-import { SEQUENCE_STYLES } from "@/lib/mock-data";
+import { SEQUENCE_STYLES, type SequenceStep } from "@/lib/mock-data";
+import { emailParagraphs, fillMergeTokens, type MergeValues } from "@/lib/email-render";
+import {
+  CAMPAIGN_TYPES,
+  FRAMEWORKS,
+  FRAMEWORK_BY_ID,
+  campaignTypeById,
+  type FrameworkId,
+} from "@/lib/sequence-options";
 
 export default function SequencePage() {
-  const { emails, setEmailField, sequenceStatus, sequenceError, generateSequence } =
-    useWizard();
+  const {
+    emails,
+    setEmailField,
+    sequenceStatus,
+    sequenceError,
+    generateSequence,
+    campaignTypeId,
+    setCampaignTypeId,
+    stepFrameworks,
+    setStepFramework,
+    campaignBrief,
+    setCampaignBrief,
+    contactGroups,
+  } = useWizard();
+  const campaignType = campaignTypeById(campaignTypeId);
+
+  // Drafted emails open as a preview; Edit shows the raw fields.
+  const [modes, setModes] = useState<Record<string, "preview" | "edit">>({});
+  const modeFor = (step: string) => modes[step] ?? "preview";
+  const setMode = (step: string, mode: "preview" | "edit") =>
+    setModes((prev) => ({ ...prev, [step]: mode }));
+
+  // Preview as a real recipient: the first contact with an email (they're the
+  // ones who get sent), else anyone found, else a placeholder.
+  const sample =
+    contactGroups.flatMap((g) => g.people.filter((p) => p.email).map((p) => ({ g, p })))[0] ??
+    contactGroups.flatMap((g) => g.people.map((p) => ({ g, p })))[0];
+  const recipient: Recipient = sample
+    ? {
+        firstName: sample.p.name.trim().split(/\s+/)[0] || "there",
+        title: sample.p.title,
+        company: sample.g.company,
+        name: sample.p.name,
+        email: sample.p.email,
+      }
+    : { firstName: "Priya", title: "HR Director", company: "Acme Industries", name: "Priya", email: "" };
+  const briefMissing = campaignType.needsBrief && !campaignBrief.trim();
 
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[900px] flex-col gap-3.5">
+        <div className="flex flex-col gap-5 rounded-[10px] border border-line bg-white p-5">
+          <div className="flex flex-col gap-2.5">
+            <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
+              Campaign type
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {CAMPAIGN_TYPES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setCampaignTypeId(t.id)}
+                  aria-pressed={t.id === campaignType.id}
+                  className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs ${
+                    t.id === campaignType.id
+                      ? "border-ink bg-ink text-paper"
+                      : "border-line bg-white text-[#55513F]"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[12.5px] leading-relaxed text-[#6E6A5C]">
+              <span className="font-medium text-ink">{campaignType.goal}</span>{" "}
+              {campaignType.guidance}
+            </p>
+          </div>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
+              Campaign brief{campaignType.needsBrief ? " · required" : ""}
+            </span>
+            <textarea
+              rows={3}
+              value={campaignBrief}
+              onChange={(e) => setCampaignBrief(e.target.value)}
+              placeholder={campaignType.briefHint}
+              className="rounded-md border border-line bg-paper p-3 text-sm leading-relaxed"
+            />
+          </label>
+
+          <div className="flex flex-col gap-2">
+            <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
+              Framework per email
+            </span>
+            {campaignType.plan.map((step, i) => {
+              const framework = FRAMEWORK_BY_ID[stepFrameworks[i] ?? step.framework];
+              return (
+                <div
+                  key={`${campaignType.id}-${i}`}
+                  className="grid grid-cols-1 items-center gap-2 border-b border-[#F0EBE0] pb-2 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_220px]"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-medium">
+                      Email {i + 1}{" "}
+                      <span className="font-mono text-[11px] font-normal text-muted">
+                        · Day {step.day} · {step.purpose}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[12px] text-muted">
+                      {framework.structure} — best for {framework.bestFor.toLowerCase()}
+                    </div>
+                  </div>
+                  <select
+                    value={framework.id}
+                    onChange={(e) => setStepFramework(i, e.target.value as FrameworkId)}
+                    aria-label={`Framework for email ${i + 1}`}
+                    className="cursor-pointer rounded-md border border-line bg-paper px-2.5 py-2 text-[13px]"
+                  >
+                    {FRAMEWORKS.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.id}
+                        {f.id === step.framework ? " (recommended)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="flex items-center gap-3.5 rounded-[10px] border border-line bg-white px-5 py-4">
           <span className="text-[13.5px] text-[#55513F]">
-            {emails.length > 0
-              ? "Regenerate the whole sequence from the case study record."
-              : "Draft a sequence from the case study record — each email gets a hook, content, and a CTA."}
+            {briefMissing
+              ? `Add the campaign brief to draft a ${campaignType.label.toLowerCase()} sequence.`
+              : emails.length > 0
+                ? "Regenerate the whole sequence with the settings above."
+                : "Draft a sequence from the case study record — each email gets a hook, content, and a CTA."}
           </span>
           <button
             onClick={generateSequence}
-            disabled={sequenceStatus === "loading"}
+            disabled={sequenceStatus === "loading" || briefMissing}
             className="ml-auto cursor-pointer rounded-md bg-teal px-4 py-2 text-[12.5px] font-semibold text-paper disabled:opacity-60"
           >
             {sequenceStatus === "loading"
@@ -59,8 +187,33 @@ export default function SequencePage() {
               >
                 {email.state}
               </span>
+              <div className="flex overflow-hidden rounded-md border border-line text-xs">
+                {(["preview", "edit"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setMode(email.step, m)}
+                    aria-pressed={modeFor(email.step) === m}
+                    className={`cursor-pointer px-3 py-1 capitalize ${
+                      modeFor(email.step) === m ? "bg-ink text-paper" : "bg-white text-[#55513F]"
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="flex flex-col gap-3 p-[18px]">
+              {email.connection && (
+                <p className="text-[12.5px] text-[#6E6A5C]">
+                  <span className="font-medium text-teal">↳ Picks up from {emails[i - 1]?.step ?? "the previous step"}:</span>{" "}
+                  {email.connection}
+                </p>
+              )}
+              {modeFor(email.step) === "preview" ? (
+                <EmailPreview email={email} recipient={recipient} />
+              ) : (
+              <>
               <label className="flex flex-col gap-1.5">
                 <span className="font-mono text-[9.5px] tracking-[0.11em] text-[#A39D8C] uppercase">
                   Subject
@@ -126,6 +279,8 @@ export default function SequencePage() {
                   className="rounded-md border border-line bg-paper p-3 text-sm leading-relaxed"
                 />
               </label>
+              </>
+              )}
               <div className="flex flex-wrap items-center gap-2.5">
                 <span className="font-mono text-[10.5px] text-muted">
                   Pulled from
@@ -154,6 +309,36 @@ export default function SequencePage() {
             Send to review
           </Link>
         )}
+      </div>
+    </div>
+  );
+}
+
+type Recipient = MergeValues & { name: string; email: string };
+
+function EmailPreview({ email, recipient }: { email: SequenceStep; recipient: Recipient }) {
+  const fill = (text: string) => fillMergeTokens(text, recipient);
+  return (
+    <div className="overflow-hidden rounded-md border border-line">
+      <div className="flex flex-col gap-1 border-b border-[#F0EBE0] bg-paper px-4 py-3 text-[12.5px]">
+        <div className="text-muted">
+          To:{" "}
+          <span className="text-[#55513F]">
+            {recipient.name}
+            {recipient.email ? ` <${recipient.email}>` : ""} · {recipient.title}, {recipient.company}
+          </span>
+        </div>
+        <div className="text-[15px] font-semibold text-ink">
+          {fill(email.subject) || <span className="font-normal text-[#B3402A]">No subject</span>}
+        </div>
+        {email.preheader && <div className="text-muted">{fill(email.preheader)}</div>}
+      </div>
+      <div className="flex flex-col gap-3 bg-white px-4 py-4 text-[14px] leading-relaxed text-ink">
+        {emailParagraphs(email).map((p, i) => (
+          <p key={i} className="whitespace-pre-line">
+            {fill(p)}
+          </p>
+        ))}
       </div>
     </div>
   );

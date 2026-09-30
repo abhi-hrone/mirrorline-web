@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { ALL_HR_ROLES } from "./hr-roles";
+import { DEFAULT_CAMPAIGN_TYPE, campaignTypeById, type FrameworkId } from "./sequence-options";
 import {
   CASE_QS,
   REVIEW_CHECKS,
@@ -83,6 +84,12 @@ type WizardState = {
   sequenceStatus: "idle" | "loading" | "error";
   sequenceError: string | null;
   generateSequence: () => Promise<void>;
+  campaignTypeId: string;
+  setCampaignTypeId: (id: string) => void;
+  stepFrameworks: FrameworkId[];
+  setStepFramework: (index: number, framework: FrameworkId) => void;
+  campaignBrief: string;
+  setCampaignBrief: (v: string) => void;
 
   checks: boolean[];
   toggleCheck: (index: number) => void;
@@ -447,6 +454,21 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   );
   const [sequenceError, setSequenceError] = useState<string | null>(null);
 
+  // Picking a campaign type resets the per-step frameworks to that type's
+  // recommended plan; the user can then override any single step.
+  const [campaignTypeId, setCampaignTypeIdState] = useState(DEFAULT_CAMPAIGN_TYPE.id);
+  const [stepFrameworks, setStepFrameworks] = useState<FrameworkId[]>(
+    DEFAULT_CAMPAIGN_TYPE.plan.map((s) => s.framework)
+  );
+  const [campaignBrief, setCampaignBrief] = useState("");
+  const setCampaignTypeId = (id: string) => {
+    const type = campaignTypeById(id);
+    setCampaignTypeIdState(type.id);
+    setStepFrameworks(type.plan.map((s) => s.framework));
+  };
+  const setStepFramework = (index: number, framework: FrameworkId) =>
+    setStepFrameworks((prev) => prev.map((f, i) => (i === index ? framework : f)));
+
   const generateSequence = async () => {
     setSequenceStatus("loading");
     setSequenceError(null);
@@ -458,6 +480,9 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
           seedName,
           answers,
           targetTitles: searchTitles().join(", "),
+          campaignType: campaignTypeId,
+          frameworks: stepFrameworks,
+          brief: campaignBrief,
         }),
       });
       const data = await res.json();
@@ -587,6 +612,12 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         sequenceStatus,
         sequenceError,
         generateSequence,
+        campaignTypeId,
+        setCampaignTypeId,
+        stepFrameworks,
+        setStepFramework,
+        campaignBrief,
+        setCampaignBrief,
         checks,
         toggleCheck,
         launched,

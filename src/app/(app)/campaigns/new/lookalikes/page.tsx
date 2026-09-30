@@ -181,7 +181,7 @@ export default function LookalikesPage() {
         )}
 
         <div className="overflow-hidden rounded-[10px] border border-line bg-white">
-          <div className="grid grid-cols-[34px_minmax(0,2fr)_76px_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.6fr)] gap-3.5 border-b border-[#E8E2D5] bg-paper px-[18px] py-[11px] font-mono text-[9.5px] tracking-[0.11em] text-muted uppercase">
+          <div className="grid grid-cols-[34px_minmax(0,2fr)_76px_minmax(0,1.1fr)_minmax(0,1.1fr)] gap-3.5 border-b border-[#E8E2D5] bg-paper px-[18px] py-[11px] font-mono text-[9.5px] tracking-[0.11em] text-muted uppercase">
             <input
               type="checkbox"
               aria-label="Select all companies"
@@ -203,7 +203,6 @@ export default function LookalikesPage() {
             <span>Score</span>
             <span>Headcount</span>
             <span>Region</span>
-            <span>Best-fit case study</span>
           </div>
 
           {filtered.map((c) => {
@@ -211,7 +210,7 @@ export default function LookalikesPage() {
             return (
               <div
                 key={c.id}
-                className="grid grid-cols-[34px_minmax(0,2fr)_76px_minmax(0,1.1fr)_minmax(0,1.1fr)_minmax(0,1.6fr)] items-center gap-3.5 border-b border-[#F0EBE0] px-[18px] py-[13px]"
+                className="grid grid-cols-[34px_minmax(0,2fr)_76px_minmax(0,1.1fr)_minmax(0,1.1fr)] items-center gap-3.5 border-b border-[#F0EBE0] px-[18px] py-[13px]"
               >
                 <button
                   onClick={() => togglePicked(c.id)}
@@ -239,9 +238,6 @@ export default function LookalikesPage() {
                   </div>
                   <div className="font-mono text-[13px] text-[#55513F]">{formatHeadcount(c.size)}</div>
                   <div className="text-[13px] text-[#55513F]">{regionLabel(c.region)}</div>
-                  <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] text-teal">
-                    {c.fit || "—"}
-                  </div>
                 </RowLink>
               </div>
             );

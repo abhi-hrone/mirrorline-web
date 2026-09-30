@@ -226,6 +226,8 @@ export type SequenceStep = {
   cta: string;
   ps: string;
   sources: string[];
+  // What this step picks up from the one before it (empty for step 1).
+  connection?: string;
   state: "Drafted" | "Needs edit";
 };
 
@@ -236,13 +238,6 @@ export const SEQUENCE_STYLES: Record<SequenceStep["state"], string> = {
 
 // The copywriting framework each step is written to. Kept in one place so the
 // generator prompt and the reviewer's UI label the steps the same way.
-export const SEQUENCE_FRAMEWORKS = [
-  { day: 0, framework: "PAS", note: "Problem → Agitate → Solution" },
-  { day: 3, framework: "BAB", note: "Before → After → Bridge" },
-  { day: 7, framework: "FAB", note: "Features → Advantages → Benefits" },
-  { day: 12, framework: "Founder note", note: "Plain-text, personal, no pitch" },
-] as const;
-
 export const INITIAL_SEQUENCE: SequenceStep[] = [
   {
     step: "Step 1",

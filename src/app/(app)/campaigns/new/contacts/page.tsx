@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CONTACT_CONFIDENCE_STYLES } from "@/lib/mock-data";
 import { pickedCompanies, useWizard } from "@/lib/wizard-context";
@@ -23,6 +23,16 @@ export default function ContactsPage() {
     picked,
   } = useWizard();
   const pickedCount = pickedCompanies(companies, picked).length;
+
+  // Search on first arrival instead of waiting for a click; the ref keeps
+  // StrictMode from firing twice. Skipped once contacts exist, since a new
+  // search would drop reveals already in progress — the button re-runs it.
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (autoLoaded.current || contactGroups.length > 0 || pickedCount === 0) return;
+    autoLoaded.current = true;
+    findContacts();
+  }, [contactGroups.length, pickedCount, findContacts]);
   const totalContacts = contactGroups.reduce((n, g) => n + g.people.length, 0);
   // Only contacts that came from a search (have an id) and don't have an email
   // yet can be selected for reveal; revealed and manually added ones can't.
@@ -34,6 +44,9 @@ export default function ContactsPage() {
     (n, g) => n + g.people.filter((p) => p.email).length,
     0
   );
+  // Only contacts with an email get pushed to Smartlead, so there's nothing
+  // to write a sequence for until at least one reveal (or manual add) lands.
+  const canDraft = revealedCount > 0;
 
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
@@ -50,7 +63,9 @@ export default function ContactsPage() {
           >
             {contactStatus === "loading"
               ? "Searching…"
-              : `Find contacts at ${pickedCount} ${pickedCount === 1 ? "company" : "companies"}`}
+              : contactGroups.length > 0
+                ? "Search again"
+                : `Find contacts at ${pickedCount} ${pickedCount === 1 ? "company" : "companies"}`}
           </button>
         </div>
         {contactError && <p className="text-[13px] text-[#B3402A]">{contactError}</p>}
@@ -87,7 +102,9 @@ export default function ContactsPage() {
           <p className="rounded-[10px] border border-line bg-white px-5 py-6 text-[13.5px] text-[#55513F]">
             {pickedCount === 0
               ? "No companies selected. Pick some on the Lookalikes step first."
-              : "Click “Find contacts” to list people at the selected companies. Emails are revealed in a second step, only for the contacts you tick."}
+              : contactStatus === "loading"
+                ? `Finding contacts at ${pickedCount} ${pickedCount === 1 ? "company" : "companies"}… Emails are revealed in a second step, only for the contacts you tick.`
+                : "No contacts found at the selected companies. Try “Find contacts” again, or pick different companies on the Lookalikes step."}
           </p>
         )}
 
@@ -181,12 +198,29 @@ export default function ContactsPage() {
           </div>
         ))}
 
-        <Link
-          href="/campaigns/new/sequence"
-          className="cursor-pointer self-start rounded-md bg-teal px-[22px] py-3 text-sm font-semibold text-paper"
-        >
-          Draft sequence
-        </Link>
+        <div className="flex flex-wrap items-center gap-3.5">
+          {canDraft ? (
+            <Link
+              href="/campaigns/new/sequence"
+              className="cursor-pointer rounded-md bg-teal px-[22px] py-3 text-sm font-semibold text-paper"
+            >
+              Draft sequence
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="cursor-not-allowed rounded-md bg-teal px-[22px] py-3 text-sm font-semibold text-paper opacity-50"
+            >
+              Draft sequence
+            </button>
+          )}
+          {!canDraft && (
+            <span className="text-[12.5px] text-muted">
+              Reveal at least one email to continue.
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
