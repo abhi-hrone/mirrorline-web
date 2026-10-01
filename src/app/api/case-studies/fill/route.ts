@@ -17,27 +17,60 @@ const FillSchema = z.object({
     .describe(
       "If not sufficient, a short, specific note on what's missing (e.g. 'no mention of results or numbers after go-live'). Empty string when sufficient."
     ),
-  industry: z.string().nullable().describe("The industry the client is in, or null if not stated"),
-  headcount: z.string().nullable().describe("How many employees the client has, or null if not stated"),
+  industry: z
+    .string()
+    .nullable()
+    .describe(
+      "The client's industry and sub-segment exactly as described (e.g. 'Manufacturing — auto components, Tier-1 supplier'), plus any other company context given (name, type of business, growth stage), on a single line. Null if not stated."
+    ),
+  headcount: z
+    .string()
+    .nullable()
+    .describe(
+      "Employee count with every breakdown given — total, by category (blue/white collar, contract, field staff), by location, and any growth over time, on a single line. Null if not stated."
+    ),
   locations: z
     .string()
     .nullable()
-    .describe("How many locations or states the client operates in, or null if not stated"),
+    .describe(
+      "Number of locations, offices, plants, branches, states or countries, naming them wherever the content does, on a single line. Null if not stated."
+    ),
   before_hrone: z
     .string()
     .nullable()
-    .describe("How the client managed HR and payroll before HROne, or null if not stated"),
-  problems: z.string().nullable().describe("The problems the client was facing, or null if not stated"),
-  modules: z.string().nullable().describe("Which HROne modules were implemented, or null if not stated"),
-  solution: z.string().nullable().describe("How HROne solved those problems, or null if not stated"),
+    .describe(
+      "Everything about how HR and payroll were run before HROne: tools, spreadsheets, previous vendors or software, manual processes, team size, how long tasks took, and why they decided to switch. Null if not stated."
+    ),
+  problems: z
+    .string()
+    .nullable()
+    .describe(
+      "Every problem or pain point mentioned, one per line as a bullet, each with its specifics (who was affected, how often, how long it took, errors, compliance risk, costs, numbers). Do not merge or drop any. Null if not stated."
+    ),
+  modules: z
+    .string()
+    .nullable()
+    .describe(
+      "Every HROne module, feature, integration, or app mentioned as implemented or used, as a comma-separated list, including any notes on rollout order or customisation. Null if not stated."
+    ),
+  solution: z
+    .string()
+    .nullable()
+    .describe(
+      "A detailed account of how HROne solved each problem: the specific features, workflows, configuration, integrations, implementation timeline, go-live date, and support involved. Map solutions to the problems where the content allows. Null if not stated."
+    ),
   benefits: z
     .string()
     .nullable()
-    .describe("Results after go-live, with numbers wherever stated, or null if not stated"),
+    .describe(
+      "Every result after go-live, one per line as a bullet, keeping every number, percentage, time saving, cost saving, before/after comparison and timeframe exactly as stated. Include qualitative outcomes and any direct quotes (verbatim, in quotes, attributed). Null if not stated."
+    ),
   client_role: z
     .string()
     .nullable()
-    .describe("Role of the client contact quoted or referenced, or null if not stated"),
+    .describe(
+      "Name (if given), designation and department of each client contact quoted or referenced, comma-separated on a single line. Null if not stated."
+    ),
 });
 
 const FIELD_IDS = [
@@ -52,9 +85,20 @@ const FIELD_IDS = [
   "client_role",
 ] as const;
 
-const SYSTEM_PROMPT = `You extract structured case-study facts from raw text a sales rep pastes in — notes, a call transcript, an email thread, or a draft write-up about a customer's HROne implementation.
+const SYSTEM_PROMPT = `You extract structured case-study facts from raw text a sales rep pastes in — notes, a call transcript, an email thread, or a draft write-up about a customer's HROne implementation. Your output fills a case study form, and the rep wants that form as complete and detailed as the content allows.
 
-Only use facts stated in the content. Never invent a number, a module, a quote, or an outcome. If a field isn't stated, return null for it — do not guess or generalize.
+Capture everything:
+- Read the whole content and carry every relevant fact into the matching field. Do not summarize, shorten, or pick "the main points" — if the content lists five problems, return all five; if it gives three metrics, return all three.
+- Keep specifics exactly as written: numbers, percentages, durations, dates, names of tools, vendors, modules, locations, and team sizes. Keep units and timeframes ("from 5 days to 4 hours", "within 3 months of go-live").
+- Keep direct quotes verbatim, in quotation marks, with who said them.
+- Industry, headcount, locations and client_role are single-line fields: pack all their details into one line, separated by commas or semicolons. The other fields can be multi-line.
+- Write full, clear sentences or bullet lists ("- " per line) rather than terse fragments. Long fields are fine.
+- If a fact fits more than one field, put it in the most specific one, and repeat it elsewhere only when it's needed for that field to make sense.
+- Pull facts from anywhere in the content, including asides and side comments in a transcript, not just the obvious sections.
+
+Never invent:
+- Only use facts stated or clearly implied in the content. Never make up a number, a module, a quote, a name, or an outcome, and never add generic marketing claims.
+- If a field genuinely isn't covered, return null for it — do not guess or pad.
 
 Judge "sufficient" strictly: it must describe a specific customer's before-state, at least one concrete problem, and ideally what was done and what changed. General marketing copy, a product description with no customer in it, or a one-line summary is NOT sufficient.`;
 
