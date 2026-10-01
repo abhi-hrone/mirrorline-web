@@ -8,7 +8,12 @@ const NAV = [
   { href: "/workspace", label: "Workspace" },
 ];
 
-export default function TopNav() {
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "U") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+}
+
+export default function TopNav({ userName }: { userName: string }) {
   const pathname = usePathname();
 
   return (
@@ -40,10 +45,18 @@ export default function TopNav() {
       </div>
 
       <div className="ml-auto flex items-center gap-2.5">
-        <span className="text-[12.5px] text-[#B5B0A1]">User</span>
+        <span className="text-[12.5px] text-[#B5B0A1]">{userName}</span>
         <div className="grid h-[26px] w-[26px] place-items-center rounded-full bg-teal font-mono text-[10px] font-bold">
-          U
+          {initials(userName)}
         </div>
+        <form action="/api/auth/logout" method="post">
+          <button
+            type="submit"
+            className="cursor-pointer rounded-md px-[9px] py-1.5 text-[12px] text-[#9C978A] hover:text-paper"
+          >
+            Sign out
+          </button>
+        </form>
       </div>
     </div>
   );

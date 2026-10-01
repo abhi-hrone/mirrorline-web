@@ -3,7 +3,7 @@
 The prompt behind **Sequence → Generate sequence**. The live copy is split across two files:
 
 - [`src/app/api/sequence/route.ts`](../src/app/api/sequence/route.ts) holds the system prompt
-  (the constant `SYSTEM_PROMPT`) and assembles the user prompt per request from the case
+  (the function `systemPrompt`) and assembles the user prompt per request from the case
   study record, the targeting, the campaign type, the brief and the per-email plan.
 - [`src/lib/sequence-options.ts`](../src/lib/sequence-options.ts) holds the campaign types and
   frameworks. Each framework's `instruction`, each type's goal, ask and guidance, and each
@@ -24,6 +24,22 @@ On the Sequence step the user picks:
 3. **A campaign brief.** This is free text for facts the case study can't supply: event
    details, an offer, a launch. It's required for the three types that depend on it.
    Otherwise it's optional.
+
+## One sequence per company
+
+**Generate** drafts a separate sequence for every target company: those with contacts
+found, or else the picked lookalikes. That's one model call per company, three at a time.
+Each request adds a TARGET COMPANY block with the facts the lookalike search returned
+(name, domain, employees, region, fit reason). The system prompt switches into per-company
+mode, which allows exactly those facts and nothing else about the company. The Sequence
+page has a company switcher and a per-company **Redraft** button. With no companies
+picked, it drafts one shared template, as before.
+
+At launch, a Smartlead campaign can hold only one sequence. So its steps are the
+placeholders `{{s1_subject}}` / `{{s1_body}}` and so on, and each lead carries its own
+company's copy in those custom fields. Smartlead won't resolve merge tokens nested inside a
+custom field, so `{{firstName}}`, `{{title}}` and `{{company}}` are filled in per lead before
+upload.
 
 ## Campaign types
 
@@ -96,7 +112,8 @@ checking in". Don't re-introduce HROne or the case study client from scratch aft
 
 WHOSE NUMBERS: the case study's headcount, locations, problems and results belong to the
 case study client, never to the recipient. Don't tell the recipient how many employees or
-plants they have. Say what the client had, and ask or imagine what the recipient's version
+plants they have. (In per-company mode: state only the listed company facts, word for
+word.) Say what the client had, and ask or imagine what the recipient's version
 looks like.
 
 EMAIL PARTS: every email has a subject, a preheader that extends the subject instead of
@@ -111,7 +128,9 @@ RULES:
 - The hook must be about the recipient, never about HROne or the sender. Make it concrete —
   what their month-end, their plants, their states or their headcount actually looks like.
 - This is a template sent to many recipients. Personalize with {{firstName}}, {{title}} and
-  {{company}} — never invent a recipient's name or company.
+  {{company}} — never invent a recipient's name or company. (In per-company mode: written
+  for one company and sent to several people there; make it unmistakably about that
+  company.)
 - Speak to the recipient's role: HR cares about effort and employee experience, finance
   about accuracy and cost, founders and COOs about scale and risk.
 - Exactly one call to action per email, framed as a question, pointing at the campaign's
@@ -143,6 +162,10 @@ HRONE CONTEXT AND PERMISSIONS:
 WHO IS RECEIVING THIS:
 - Titles: <target HR roles>
 - The same sequence goes to every recipient — write to the role, use the merge tokens.
+  (Per-company mode replaces this with the TARGET COMPANY block below.)
+
+TARGET COMPANY (per-company mode only):
+- Name, domain, employees, region, fit reason — whichever the lookalike search returned
 
 CAMPAIGN:
 - Type: <type label>

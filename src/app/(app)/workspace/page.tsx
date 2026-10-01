@@ -5,8 +5,8 @@ import PageHeader from "@/components/PageHeader";
 import { INTEGRATIONS, INTEGRATION_STATE_STYLES } from "@/lib/mock-data";
 
 export default function WorkspacePage() {
-  const [company, setCompany] = useState("Northbeam Logistics Cloud");
-  const [website, setWebsite] = useState("northbeam.co");
+  const [company, setCompany] = useState("HROne");
+  const [website, setWebsite] = useState("hrone.cloud");
 
   return (
     <>

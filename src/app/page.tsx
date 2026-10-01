@@ -1,30 +1,19 @@
-"use client";
+// Set by /api/auth/microsoft/callback (and /login) when sign-in doesn't go through.
+const ERRORS: Record<string, string> = {
+  denied: "Sign-in was cancelled or refused by Microsoft.",
+  state: "That sign-in link expired. Try again.",
+  token: "Microsoft sign-in failed. Try again.",
+  tenant: "That account isn't part of this workspace's Microsoft tenant.",
+  not_configured: "Microsoft sign-in isn't set up on the server yet.",
+};
 
-import { useRouter } from "next/navigation";
-
-export default function SignInPage() {
-  const router = useRouter();
-
-  const handleContinue = async () => {
-    const key = window.prompt("Enter your security key to continue:");
-    if (!key) return;
-
-    try {
-      const res = await fetch("/api/auth/verify-key", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key }),
-      });
-      const data = await res.json();
-      if (res.ok && data.valid) {
-        router.push("/campaigns");
-      } else {
-        window.alert("Incorrect security key.");
-      }
-    } catch {
-      window.alert("Could not verify the security key. Try again.");
-    }
-  };
+export default async function SignInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const { error } = await searchParams;
+  const errorMessage = typeof error === "string" ? (ERRORS[error] ?? ERRORS.token) : null;
 
   return (
     <div className="grid min-h-screen grid-cols-1 bg-paper md:grid-cols-[1.05fr_0.95fr]">
@@ -70,9 +59,14 @@ export default function SignInPage() {
             Use your work account. Access follows your Microsoft groups.
           </p>
 
-          <button
-            type="button"
-            onClick={handleContinue}
+          {errorMessage && (
+            <p className="mb-4 rounded-md border border-[#6B3A2A] bg-[#2A1C16] px-3.5 py-2.5 text-[13px] leading-relaxed text-[#E8B4A0]">
+              {errorMessage}
+            </p>
+          )}
+
+          <a
+            href="/api/auth/microsoft/login"
             className="flex w-full cursor-pointer items-center justify-center gap-3 rounded-md bg-paper px-[18px] py-[15px] text-[15px] font-semibold text-ink transition-transform hover:-translate-y-px"
           >
             <span className="grid grid-cols-2 grid-rows-2 gap-0.5">
@@ -82,11 +76,11 @@ export default function SignInPage() {
               <span className="h-[9px] w-[9px] bg-[#FFB900]" />
             </span>
             Continue with Microsoft
-          </button>
+          </a>
 
           <div className="mt-5 rounded-md border border-[#332F22] p-3.5 font-mono text-[11px] leading-[1.7] text-muted">
-            <div>tenant &nbsp;&middot;&nbsp; northbeam.co</div>
-            <div>scopes &nbsp;&middot;&nbsp; User.Read, Group.Read.All</div>
+            <div>tenant &nbsp;&middot;&nbsp; hrone.cloud</div>
+            <div>scopes &nbsp;&middot;&nbsp; openid, profile, email</div>
           </div>
 
           <p className="mt-7 text-xs leading-relaxed text-[#6B6758]">

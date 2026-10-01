@@ -75,6 +75,14 @@ type WizardState = {
     person: { name: string; title: string; email: string; phone?: string; linkedin?: string }
   ) => void;
 
+  // One sequence per target company, keyed by domain (SHARED_SEQUENCE when
+  // there are no companies yet). `emails` is the active company's sequence.
+  sequenceCompanies: SequenceCompany[];
+  sequences: Record<string, SequenceStep[]>;
+  activeSequenceDomain: string;
+  setActiveSequenceDomain: (domain: string) => void;
+  sequenceProgress: { done: number; total: number };
+  redraftCompany: (domain: string) => Promise<void>;
   emails: SequenceStep[];
   setEmailField: (
     index: number,
@@ -101,6 +109,21 @@ type WizardState = {
   sendingStarted: boolean;
   launch: () => Promise<void>;
 };
+
+export type SequenceCompany = {
+  name: string;
+  domain: string;
+  size: string;
+  region: string;
+  fit: string;
+};
+
+// Key for the one template sequence drafted when no companies are picked yet.
+export const SHARED_SEQUENCE = "";
+
+// Drafting runs one model call per company; cap how many run at once so a
+// 30-company campaign doesn't fire 30 parallel requests at Azure OpenAI.
+const SEQUENCE_CONCURRENCY = 3;
 
 const WizardContext = createContext<WizardState | null>(null);
 
@@ -439,15 +462,41 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
       )
     );
 
-  const [emails, setEmails] = useState<SequenceStep[]>([]);
+  // The companies that will actually be emailed: those with contacts found,
+  // else the picked lookalikes. Size/region/fit come from the lookalike row.
+  const companyByDomain = new Map(companies.map((c) => [c.domain, c]));
+  const sequenceCompanies: SequenceCompany[] = (
+    contactGroups.length > 0
+      ? contactGroups.map((g) => ({ name: g.company, domain: g.domain }))
+      : pickedCompanies(companies, picked).map((c) => ({ name: c.name, domain: c.domain }))
+  ).map(({ name, domain }) => {
+    const c = companyByDomain.get(domain);
+    return { name, domain, size: c?.size ?? "", region: c?.region ?? "", fit: c?.fit ?? "" };
+  });
+
+  const [sequences, setSequences] = useState<Record<string, SequenceStep[]>>({});
+  const [activeDomainState, setActiveSequenceDomain] = useState<string | null>(null);
+  // Falls back to the first company with a draft, so the page never shows an
+  // empty pane while drafts exist.
+  const activeSequenceDomain =
+    activeDomainState !== null && sequences[activeDomainState]
+      ? activeDomainState
+      : (sequenceCompanies.find((c) => sequences[c.domain])?.domain ??
+        Object.keys(sequences)[0] ??
+        SHARED_SEQUENCE);
+  const emails = sequences[activeSequenceDomain] ?? [];
   const setEmailField = (
     index: number,
     field: "subject" | "preheader" | "hook" | "content" | "cta" | "ps",
     value: string
   ) =>
-    setEmails((prev) =>
-      prev.map((e, i) => (i === index ? { ...e, [field]: value } : e))
-    );
+    setSequences((prev) => ({
+      ...prev,
+      [activeSequenceDomain]: (prev[activeSequenceDomain] ?? []).map((e, i) =>
+        i === index ? { ...e, [field]: value } : e
+      ),
+    }));
+  const [sequenceProgress, setSequenceProgress] = useState({ done: 0, total: 0 });
 
   const [sequenceStatus, setSequenceStatus] = useState<"idle" | "loading" | "error">(
     "idle"
@@ -469,30 +518,86 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   const setStepFramework = (index: number, framework: FrameworkId) =>
     setStepFrameworks((prev) => prev.map((f, i) => (i === index ? framework : f)));
 
+  const draftSequence = async (company: SequenceCompany | null): Promise<SequenceStep[]> => {
+    const res = await fetch("/api/sequence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        seedName,
+        answers,
+        targetTitles: searchTitles().join(", "),
+        campaignType: campaignTypeId,
+        frameworks: stepFrameworks,
+        brief: campaignBrief,
+        company,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Sequence generation failed");
+    return data.steps ?? [];
+  };
+
+  // Drafts every company's sequence, a few at a time. Each draft lands as
+  // soon as it's ready, and one company failing doesn't lose the others.
   const generateSequence = async () => {
     setSequenceStatus("loading");
     setSequenceError(null);
+    const targets: (SequenceCompany | null)[] =
+      sequenceCompanies.length > 0 ? sequenceCompanies : [null];
+    setSequences({});
+    setActiveSequenceDomain(null);
+    setSequenceProgress({ done: 0, total: targets.length });
+
+    const failed: { name: string; error: string }[] = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < targets.length) {
+        const company = targets[next++];
+        try {
+          const steps = await draftSequence(company);
+          setSequences((prev) => ({ ...prev, [company?.domain ?? SHARED_SEQUENCE]: steps }));
+        } catch (err) {
+          failed.push({
+            name: company?.name ?? "the campaign",
+            error: err instanceof Error ? err.message : "Sequence generation failed",
+          });
+        }
+        setSequenceProgress((p) => ({ ...p, done: p.done + 1 }));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(SEQUENCE_CONCURRENCY, targets.length) }, worker)
+    );
+
+    if (failed.length === 0) {
+      setSequenceStatus("idle");
+    } else {
+      // Every company fails the same way on a config or input problem, so
+      // show that message once rather than a list of identical errors.
+      setSequenceError(
+        failed.length === targets.length
+          ? failed[0].error
+          : `Couldn't draft for ${failed.map((f) => f.name).join(", ")}. Redraft them from the company list.`
+      );
+      setSequenceStatus("error");
+    }
+  };
+
+  const redraftCompany = async (domain: string) => {
+    const company = sequenceCompanies.find((c) => c.domain === domain) ?? null;
+    setSequenceStatus("loading");
+    setSequenceError(null);
+    setSequenceProgress({ done: 0, total: 1 });
     try {
-      const res = await fetch("/api/sequence", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          seedName,
-          answers,
-          targetTitles: searchTitles().join(", "),
-          campaignType: campaignTypeId,
-          frameworks: stepFrameworks,
-          brief: campaignBrief,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Sequence generation failed");
-      setEmails(data.steps ?? []);
+      const steps = await draftSequence(company);
+      setSequences((prev) => ({ ...prev, [company?.domain ?? SHARED_SEQUENCE]: steps }));
+      setActiveSequenceDomain(company?.domain ?? SHARED_SEQUENCE);
       setSequenceStatus("idle");
     } catch (err) {
       setSequenceError(err instanceof Error ? err.message : "Sequence generation failed");
       setSequenceStatus("error");
     }
+    setSequenceProgress({ done: 1, total: 1 });
   };
 
   const [checks, setChecks] = useState(REVIEW_CHECKS.map(() => false));
@@ -522,15 +627,20 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
           campaignName,
           seedName,
           seedWebsite,
-          steps: emails.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
-            day,
-            subject,
-            preheader,
-            hook,
-            content,
-            cta,
-            ps,
-          })),
+          sequences: Object.fromEntries(
+            Object.entries(sequences).map(([domain, steps]) => [
+              domain,
+              steps.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
+                day,
+                subject,
+                preheader,
+                hook,
+                content,
+                cta,
+                ps,
+              })),
+            ])
+          ),
           groups: contactGroups.map(({ company, domain, people }) => ({
             company,
             domain,
@@ -607,6 +717,12 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         revealSelected,
         removeContact,
         addContact,
+        sequenceCompanies,
+        sequences,
+        activeSequenceDomain,
+        setActiveSequenceDomain,
+        sequenceProgress,
+        redraftCompany,
         emails,
         setEmailField,
         sequenceStatus,

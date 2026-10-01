@@ -27,6 +27,12 @@ export default function SequencePage() {
     campaignBrief,
     setCampaignBrief,
     contactGroups,
+    sequenceCompanies,
+    sequences,
+    activeSequenceDomain,
+    setActiveSequenceDomain,
+    sequenceProgress,
+    redraftCompany,
   } = useWizard();
   const campaignType = campaignTypeById(campaignTypeId);
 
@@ -36,11 +42,14 @@ export default function SequencePage() {
   const setMode = (step: string, mode: "preview" | "edit") =>
     setModes((prev) => ({ ...prev, [step]: mode }));
 
-  // Preview as a real recipient: the first contact with an email (they're the
-  // ones who get sent), else anyone found, else a placeholder.
+  // Preview as a real recipient at the company being viewed: the first contact
+  // with an email (they're the ones who get sent), else anyone found there,
+  // else a placeholder.
+  const activeCompany = sequenceCompanies.find((c) => c.domain === activeSequenceDomain);
+  const activeGroups = contactGroups.filter((g) => g.domain === activeSequenceDomain);
   const sample =
-    contactGroups.flatMap((g) => g.people.filter((p) => p.email).map((p) => ({ g, p })))[0] ??
-    contactGroups.flatMap((g) => g.people.map((p) => ({ g, p })))[0];
+    activeGroups.flatMap((g) => g.people.filter((p) => p.email).map((p) => ({ g, p })))[0] ??
+    activeGroups.flatMap((g) => g.people.map((p) => ({ g, p })))[0];
   const recipient: Recipient = sample
     ? {
         firstName: sample.p.name.trim().split(/\s+/)[0] || "there",
@@ -49,7 +58,14 @@ export default function SequencePage() {
         name: sample.p.name,
         email: sample.p.email,
       }
-    : { firstName: "Priya", title: "HR Director", company: "Acme Industries", name: "Priya", email: "" };
+    : {
+        firstName: "Priya",
+        title: "HR Director",
+        company: activeCompany?.name ?? "Acme Industries",
+        name: "Priya",
+        email: "",
+      };
+  const draftedCount = sequenceCompanies.filter((c) => sequences[c.domain]).length;
   const briefMissing = campaignType.needsBrief && !campaignBrief.trim();
 
   return (
@@ -141,9 +157,13 @@ export default function SequencePage() {
           <span className="text-[13.5px] text-[#55513F]">
             {briefMissing
               ? `Add the campaign brief to draft a ${campaignType.label.toLowerCase()} sequence.`
-              : emails.length > 0
-                ? "Regenerate the whole sequence with the settings above."
-                : "Draft a sequence from the case study record — each email gets a hook, content, and a CTA."}
+              : sequenceStatus === "loading"
+                ? `Drafting ${sequenceProgress.done} of ${sequenceProgress.total}…`
+                : sequenceCompanies.length === 0
+                  ? "No companies picked yet — this drafts one shared sequence for the whole campaign."
+                  : emails.length > 0
+                    ? `Redraft all ${sequenceCompanies.length} companies' sequences with the settings above.`
+                    : `Draft a sequence for each of the ${sequenceCompanies.length} companies, written from the case study and what we know about that company.`}
           </span>
           <button
             onClick={generateSequence}
@@ -153,11 +173,66 @@ export default function SequencePage() {
             {sequenceStatus === "loading"
               ? "Drafting…"
               : emails.length > 0
-                ? "Regenerate sequence"
-                : "Generate sequence"}
+                ? "Regenerate all"
+                : sequenceCompanies.length > 1
+                  ? `Generate ${sequenceCompanies.length} sequences`
+                  : "Generate sequence"}
           </button>
         </div>
         {sequenceError && <p className="text-[13px] text-[#B3402A]">{sequenceError}</p>}
+
+        {sequenceCompanies.length > 0 && Object.keys(sequences).length > 0 && (
+          <div className="flex flex-col gap-2.5 rounded-[10px] border border-line bg-white px-5 py-4">
+            <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
+              Company · {draftedCount} of {sequenceCompanies.length} drafted
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {sequenceCompanies.map((c) => {
+                const drafted = !!sequences[c.domain];
+                const active = c.domain === activeSequenceDomain;
+                return (
+                  <button
+                    key={c.domain}
+                    type="button"
+                    onClick={() => (drafted ? setActiveSequenceDomain(c.domain) : redraftCompany(c.domain))}
+                    disabled={!drafted && sequenceStatus === "loading"}
+                    aria-pressed={active}
+                    title={drafted ? c.domain : `Not drafted yet — click to draft ${c.name}`}
+                    className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs disabled:opacity-60 ${
+                      active
+                        ? "border-ink bg-ink text-paper"
+                        : drafted
+                          ? "border-line bg-white text-[#55513F]"
+                          : "border-dashed border-line bg-paper text-muted"
+                    }`}
+                  >
+                    {c.name}
+                    {!drafted && " · draft"}
+                  </button>
+                );
+              })}
+            </div>
+            {activeCompany && (
+              <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-[#6E6A5C]">
+                <span>
+                  Written for <span className="font-medium text-ink">{activeCompany.name}</span>
+                  {[activeCompany.size && /\d/.test(activeCompany.size) && `${activeCompany.size} employees`, activeCompany.region]
+                    .filter(Boolean)
+                    .map((f) => ` · ${f}`)
+                    .join("")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => redraftCompany(activeCompany.domain)}
+                  disabled={sequenceStatus === "loading"}
+                  className="ml-auto cursor-pointer rounded-md border border-line px-[13px] py-[7px] text-xs font-medium text-[#55513F] disabled:opacity-60"
+                >
+                  Redraft {activeCompany.name}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {emails.length === 0 && sequenceStatus !== "loading" && (
           <p className="rounded-[10px] border border-line bg-white px-5 py-6 text-[13.5px] text-[#55513F]">

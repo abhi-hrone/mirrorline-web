@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withRequestLog } from "@/lib/logger";
 import { saveLaunchedCampaign } from "@/lib/campaigns";
-import { emailParagraphs } from "@/lib/email-render";
+import { emailParagraphs, fillMergeTokens, type MergeValues } from "@/lib/email-render";
 
 export const maxDuration = 60;
 
@@ -23,25 +23,22 @@ function smartleadUrl(path: string, apiKey: string) {
   return `${SMARTLEAD_BASE_URL}${path}?api_key=${encodeURIComponent(apiKey)}`;
 }
 
-// Our sequence generator (see /api/sequence) writes {{firstName}}/{{company}};
-// Smartlead's merge fields are snake_case ({{first_name}}/{{company_name}}) —
-// translate so emails don't go out with literal, unresolved braces.
-// {{title}} passes through unchanged since it resolves from the `title`
-// custom field attached to each lead below.
-function toSmartleadTokens(text: string) {
-  return text
-    .replace(/{{\s*firstName\s*}}/g, "{{first_name}}")
-    .replace(/{{\s*company\s*}}/g, "{{company_name}}");
-}
+// Each company gets its own drafted sequence, but a Smartlead campaign has
+// only one. So the campaign's steps are just placeholders — {{s1_subject}},
+// {{s1_body}}, ... — and every lead carries its own company's copy in those
+// custom fields. Smartlead doesn't resolve merge tokens nested inside a custom
+// field, so {{firstName}}/{{title}}/{{company}} are filled in here, per lead.
+const subjectField = (i: number) => `s${i + 1}_subject`;
+const bodyField = (i: number) => `s${i + 1}_body`;
 
-function toEmailBody(step: StepIn) {
+function toEmailBody(step: StepIn, values: MergeValues) {
   const paragraphs = emailParagraphs(step)
-    .map((p) => `<p>${toSmartleadTokens(p)}</p>`)
+    .map((p) => `<p>${fillMergeTokens(p, values)}</p>`)
     .join("");
   // The preheader rides as a hidden first line so inboxes show it as the
   // preview text instead of repeating the opening sentence.
   const preheader = step.preheader
-    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${toSmartleadTokens(step.preheader)}</div>`
+    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${fillMergeTokens(step.preheader, values)}</div>`
     : "";
   return `${preheader}${paragraphs}`;
 }
@@ -88,8 +85,15 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
 
   const body = await req.json().catch(() => ({}));
   const campaignName = typeof body.campaignName === "string" ? body.campaignName.trim() : "";
-  const steps: StepIn[] = Array.isArray(body.steps) ? body.steps : [];
+  // Keyed by company domain; "" holds the shared template, used for any
+  // company that has no sequence of its own.
+  const sequencesIn: Record<string, StepIn[]> =
+    body.sequences && typeof body.sequences === "object" ? body.sequences : {};
   const groups: GroupIn[] = Array.isArray(body.groups) ? body.groups : [];
+  const stepsFor = (domain: string) => sequencesIn[domain] ?? sequencesIn[""] ?? [];
+  // Every company's sequence follows the same campaign plan, so any one of
+  // them gives the step count and schedule.
+  const steps: StepIn[] = Object.values(sequencesIn).find((s) => Array.isArray(s) && s.length) ?? [];
   const seedName = typeof body.seedName === "string" ? body.seedName.trim() : "";
   const seedWebsite = typeof body.seedWebsite === "string" ? body.seedWebsite.trim() : "";
 
@@ -105,21 +109,40 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
     );
   }
 
-  const leadList = groups.flatMap((g) =>
-    g.people
-      .filter((p) => p.email)
-      .map((p) => {
-        const [firstName, ...rest] = p.name.trim().split(/\s+/);
-        return {
-          email: p.email,
-          first_name: firstName ?? "",
-          last_name: rest.join(" "),
-          company_name: g.company,
-          phone_number: p.phone || undefined,
-          custom_fields: { title: p.title || "" },
-        };
-      })
-  );
+  // A company without a draft (and no shared template to fall back on)
+  // would go out with blank emails, so its contacts are left out.
+  const skippedCompanies = groups
+    .filter((g) => g.people.some((p) => p.email) && stepsFor(g.domain).length !== steps.length)
+    .map((g) => g.company);
+
+  const leadList = groups
+    .filter((g) => stepsFor(g.domain).length === steps.length)
+    .flatMap((g) =>
+      g.people
+        .filter((p) => p.email)
+        .map((p) => {
+          const [firstName, ...rest] = p.name.trim().split(/\s+/);
+          const values: MergeValues = {
+            firstName: firstName || "there",
+            title: p.title || "",
+            company: g.company,
+          };
+          const copy = Object.fromEntries(
+            stepsFor(g.domain).flatMap((s, i) => [
+              [subjectField(i), fillMergeTokens(s.subject, values)],
+              [bodyField(i), toEmailBody(s, values)],
+            ])
+          );
+          return {
+            email: p.email,
+            first_name: firstName ?? "",
+            last_name: rest.join(" "),
+            company_name: g.company,
+            phone_number: p.phone || undefined,
+            custom_fields: { title: p.title || "", ...copy },
+          };
+        })
+    );
 
   if (leadList.length === 0) {
     console.error("Smartlead launch rejected: no contacts with an email", {
@@ -130,7 +153,9 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
     return NextResponse.json(
       {
         error:
-          "No contacts with a revealed email yet — wait for reveals to finish, then try again.",
+          skippedCompanies.length > 0
+            ? `No drafted sequence for ${skippedCompanies.join(", ")} — draft them on the Sequence step first.`
+            : "No contacts with a revealed email yet — wait for reveals to finish, then try again.",
       },
       { status: 400 }
     );
@@ -175,8 +200,8 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
     const delays = toStepDelays(steps);
     const sequences = steps.map((s, i) => ({
       seq_number: i + 1,
-      subject: toSmartleadTokens(s.subject),
-      email_body: toEmailBody(s),
+      subject: `{{${subjectField(i)}}}`,
+      email_body: `{{${bodyField(i)}}}`,
       seq_delay_details: { delay_in_days: delays[i] },
     }));
     const seqRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/sequences`, apiKey), {
@@ -286,6 +311,7 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
       campaignUrl: `https://app.smartlead.ai/app/email-campaigns-v2/${campaignId}/leads`,
       leadsAdded: leadList.length,
       stepsAdded: sequences.length,
+      skippedCompanies,
       started,
       senderCount,
     });

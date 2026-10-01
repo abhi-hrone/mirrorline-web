@@ -51,7 +51,9 @@ const SequenceSchema = z.object({
   steps: z.array(StepSchema).min(1).max(6),
 });
 
-const SYSTEM_PROMPT = `You are an expert B2B email writer for HROne, an HR and payroll software company selling to Indian businesses. You write email sequences to decision-makers at Indian companies that are not HROne customers yet, built on one approved customer case study.
+// perCompany: the sequence is drafted for one named lookalike company rather
+// than as a template for every company in the campaign.
+const systemPrompt = (perCompany: boolean) => `You are an expert B2B email writer for HROne, an HR and payroll software company selling to Indian businesses. You write email sequences to decision-makers at Indian companies that are not HROne customers yet, built on one approved customer case study.
 
 Each request gives you the campaign type, its goal, the one thing every email asks for, and a plan: for each email, its send day, its purpose in the sequence, and the copywriting framework it must follow, with that framework's structure spelled out. Write each email's body to its own framework — the structure is the skeleton, not a set of labels to print. Return exactly as many emails as the plan lists, in that order — no extra step, no repeated step.
 
@@ -59,7 +61,11 @@ FIRST SUBJECT: email 1's subject names a concrete outcome the recipient's own co
 
 ONE CONVERSATION: the sequence reads as one thread, not separate emails. From email 2 on, first fill "connection" with the specific point, number or question from the previous email that this one carries forward. Then the hook's first sentence must name that same point explicitly, so the reader sees the thread — for example "That 2-day payroll cycle usually raises one question: what happens to the plants still on spreadsheets?" or "The part of that before/after story most HR heads ask about is the switch itself." A reader who missed the earlier email must still follow. Never the lazy versions: "as I mentioned", "following up on my last email", "circling back", "just checking in". Don't re-introduce HROne or the case study client from scratch after email 1.
 
-WHOSE NUMBERS: the case study's headcount, locations, problems and results belong to the case study client, never to the recipient. Don't tell the recipient how many employees or plants they have — you don't know. Say what the client had, and ask or imagine what the recipient's version looks like.
+WHOSE NUMBERS: the case study's headcount, locations, problems and results belong to the case study client, never to the recipient. ${
+  perCompany
+    ? "The request lists the few facts known about the recipient's company — state only those, word for word. Anything else about them (plants, states, payroll process, problems) you don't know, so ask or imagine it rather than asserting it."
+    : "Don't tell the recipient how many employees or plants they have — you don't know."
+} Say what the client had, and ask or imagine what the recipient's version looks like.
 
 EMAIL PARTS: every email has a subject, a preheader that extends the subject instead of repeating it, a hook, a body, one CTA, and an optional P.S. Only "ps" may be empty — subject, preheader, hook, content and cta are always filled, in every email including the closing note. The P.S. is the second-most-read line — use it for the offer or the proof, not for a second ask. Subjects are about the recipient's situation, never about the sender or about HROne.
 
@@ -67,7 +73,11 @@ RULES:
 - Under 90 words in "content". Plain text, no formatting, no emojis, no exclamation points.
 - Write like a person, not a marketer. Simple, direct Indian business English.
 - The hook must be about the recipient, never about HROne or the sender. Make it concrete — what their month-end, their plants, their states or their headcount actually looks like — not a general observation about HR.
-- This is a template sent to many recipients across many companies, not one person. Personalize with the merge tokens {{firstName}}, {{title}} and {{company}} — never invent a recipient's name or company.
+${
+  perCompany
+    ? "- This sequence is written for one company and sent to several people there. Make it unmistakably about that company — its size, region and why it resembles the case study client — not a template that could go anywhere. Use the merge tokens {{firstName}}, {{title}} and {{company}} for the recipient — never invent a recipient's name."
+    : "- This is a template sent to many recipients across many companies, not one person. Personalize with the merge tokens {{firstName}}, {{title}} and {{company}} — never invent a recipient's name or company."
+}
 - Speak to the recipient's role: HR cares about effort and employee experience, finance cares about accuracy and cost, founders and COOs care about scale and risk.
 - Exactly one call to action per email, framed as a question, pointing at the campaign's ask. "cta" is never empty, including in the closing note.
 - Subject lines: 2 to 5 words, lowercase, no clickbait, no "Re:" tricks. No question mark unless the subject is genuinely a question.
@@ -111,6 +121,22 @@ export const POST = withRequestLog("sequence", async (req: NextRequest) => {
     return { ...step, framework: isFrameworkId(chosen) ? chosen : step.framework };
   });
   const numSteps = plan.length;
+
+  // Optional: the one lookalike company this sequence is written for. Only
+  // what the lookalike search returned is passed on as fact — "—" and
+  // "Other" are its placeholders for "unknown", so they're dropped.
+  const rawCompany = body.company && typeof body.company === "object" ? body.company : null;
+  const companyField = (key: string) =>
+    rawCompany && typeof rawCompany[key] === "string" ? (rawCompany[key] as string).trim() : "";
+  const company = companyField("name")
+    ? {
+        name: companyField("name"),
+        domain: companyField("domain"),
+        size: /\d/.test(companyField("size")) ? companyField("size") : "",
+        region: companyField("region") === "Other" ? "" : companyField("region"),
+        fit: companyField("fit"),
+      }
+    : null;
 
   if (campaignType.needsBrief && !brief) {
     return NextResponse.json(
@@ -181,7 +207,22 @@ ${valueFor("hrone_context")}`,
     })
     .join("\n");
 
-  const sourceLabels = [...filledAnswers.map((a) => a.label), ...(brief ? ["Campaign brief"] : [])];
+  const companyText = company
+    ? [
+        `- Name: ${company.name}${company.domain ? ` (${company.domain})` : ""}`,
+        company.size && `- Employees: ${company.size}`,
+        company.region && `- Region: ${company.region}`,
+        company.fit && `- Why it matches the case study client: ${company.fit}`,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
+
+  const sourceLabels = [
+    ...filledAnswers.map((a) => a.label),
+    ...(brief ? ["Campaign brief"] : []),
+    ...(company ? ["Target company"] : []),
+  ];
 
   const userPrompt = `CASE STUDY (from the implementation consultant):
 ${caseStudyText}
@@ -194,7 +235,14 @@ ${
   targetingText ||
   "- Decision-makers at companies with a similar profile to the case study client."
 }
-- The same sequence goes to every recipient, so write to the role, not to a person, and use {{firstName}}, {{title}} and {{company}}.
+${
+  company
+    ? `- Everyone receiving this works at the company below; write to their role, and use {{firstName}}, {{title}} and {{company}}.
+
+TARGET COMPANY (all that is known about it — state nothing else about them as fact):
+${companyText}`
+    : "- The same sequence goes to every recipient, so write to the role, not to a person, and use {{firstName}}, {{title}} and {{company}}."
+}
 
 CAMPAIGN:
 - Type: ${campaignType.label}
@@ -225,7 +273,7 @@ Write exactly ${numSteps} emails, in that order, using only the facts above. The
     const completion = await client.chat.completions.parse({
       model: deployment as string,
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt(!!company) },
         { role: "user", content: userPrompt },
       ],
       response_format: zodResponseFormat(SequenceSchema, "email_sequence"),
