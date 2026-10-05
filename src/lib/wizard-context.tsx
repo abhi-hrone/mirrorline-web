@@ -5,15 +5,64 @@ import { ALL_HR_ROLES } from "./hr-roles";
 import { DEFAULT_CAMPAIGN_TYPE, campaignTypeById, type FrameworkId } from "./sequence-options";
 import {
   CASE_QS,
+  CONTEXT_QS,
   REVIEW_CHECKS,
+  WIZARD_STEPS_BY_MODE,
   Company,
   ContactGroup,
   SequenceStep,
+  ResearchSource,
   CaseStudyOption,
+  PastUserMatch,
+  DirectorMatch,
+  WizardMode,
   caseStudyToAnswers,
 } from "./mock-data";
+import { normalizeDomain } from "./domain";
 
 type WizardState = {
+  mode: WizardMode;
+  setMode: (m: WizardMode) => void;
+  steps: (typeof WIZARD_STEPS_BY_MODE)[WizardMode];
+
+  // Past-user mode: the person we're following, and where they are now.
+  pastUserInput: PastUserInput;
+  setPastUserInput: (field: keyof PastUserInput, value: string) => void;
+  pastUserMatch: PastUserMatch | null;
+  setPastUserCurrent: (field: keyof NonNullable<PastUserMatch["current"]>, value: string) => void;
+  pastUserStatus: "idle" | "loading" | "error";
+  pastUserError: string | null;
+  lookupPastUser: () => Promise<void>;
+  // When Apollo has no match or hasn't seen the move, the rep types the
+  // new company in by hand.
+  enterPastUserManually: () => void;
+  // Locks in the match: the old company becomes the case study, the new one
+  // the only company the campaign writes to.
+  confirmPastUser: () => void;
+  pastUserConfirmed: boolean;
+  // The published case study about the one known customer behind the
+  // campaign: the past user's old company, or the director's HROne company.
+  knownCaseStatus: "idle" | "loading" | "found" | "none" | "error";
+  findKnownCaseStudy: () => Promise<void>;
+
+  // Director mode: a director of an HROne customer, and the other companies
+  // they sit on. Each picked company becomes a target.
+  directorInput: DirectorInput;
+  setDirectorInput: (field: keyof DirectorInput, value: string) => void;
+  directorMatch: DirectorMatch | null;
+  directorStatus: "idle" | "loading" | "error";
+  directorError: string | null;
+  lookupDirector: () => Promise<void>;
+  directorPicked: Record<string, boolean>;
+  toggleDirectorCompany: (id: string) => void;
+  // For board seats Apollo doesn't know about (e.g. from MCA filings).
+  addDirectorCompany: (company: { name: string; domain: string; title: string }) => void;
+  // Whether the emails may name the director, or only say a company that
+  // shares their board already uses HROne.
+  directorNamed: boolean;
+  setDirectorNamed: (v: boolean) => void;
+  confirmDirector: () => void;
+
   seedName: string;
   seedWebsite: string;
   setSeedName: (v: string) => void;
@@ -79,6 +128,8 @@ type WizardState = {
   // there are no companies yet). `emails` is the active company's sequence.
   sequenceCompanies: SequenceCompany[];
   sequences: Record<string, SequenceStep[]>;
+  // What the web search turned up for each company, keyed by domain.
+  companyResearch: Record<string, ResearchSource[]>;
   activeSequenceDomain: string;
   setActiveSequenceDomain: (domain: string) => void;
   sequenceProgress: { done: number; total: number };
@@ -92,6 +143,8 @@ type WizardState = {
   sequenceStatus: "idle" | "loading" | "error";
   sequenceError: string | null;
   generateSequence: () => Promise<void>;
+  // Redrafts the past user's own track (past-user mode).
+  redraftPastUserTrack: () => Promise<void>;
   campaignTypeId: string;
   setCampaignTypeId: (id: string) => void;
   stepFrameworks: FrameworkId[];
@@ -105,10 +158,31 @@ type WizardState = {
   launchStatus: "idle" | "loading" | "error";
   launchError: string | null;
   smartleadCampaignUrl: string | null;
+  pastUserCampaignUrl: string | null;
   leadsSent: number;
   sendingStarted: boolean;
   launch: () => Promise<void>;
 };
+
+export type DirectorInput = {
+  name: string;
+  customerDomain: string;
+  linkedin: string;
+};
+
+// Either the email they had at the old company or its website is enough;
+// the position is checked against their job history.
+export type PastUserInput = {
+  name: string;
+  email: string;
+  oldCompanyName: string;
+  oldCompanyDomain: string;
+  oldTitle: string;
+};
+
+// Key in `sequences` for the past user's own track. Company domains can't
+// look like this, so it never collides with a company's sequence.
+export const PAST_USER_SEQUENCE = "__pastuser__";
 
 export type SequenceCompany = {
   name: string;
@@ -128,11 +202,49 @@ const SEQUENCE_CONCURRENCY = 3;
 const WizardContext = createContext<WizardState | null>(null);
 
 export function WizardProvider({ children }: { children: React.ReactNode }) {
+  const [mode, setMode] = useState<WizardMode>("customer");
+  const steps = WIZARD_STEPS_BY_MODE[mode];
   const [seedName, setSeedName] = useState("Salesforce");
   const [seedWebsite, setSeedWebsite] = useState("www.salesforce.com");
   const [targetTitles, setTargetTitles] = useState("");
   const [targetRoles, setTargetRoles] = useState<string[]>([...ALL_HR_ROLES]);
-  const campaignName = `${seedName.trim() || "Campaign"} lookalikes · HR leaders · India`;
+
+  const [pastUserInput, setPastUserInputState] = useState<PastUserInput>({
+    name: "",
+    email: "",
+    oldCompanyName: "",
+    oldCompanyDomain: "",
+    oldTitle: "",
+  });
+  const setPastUserInput = (field: keyof PastUserInput, value: string) =>
+    setPastUserInputState((prev) => ({ ...prev, [field]: value }));
+  const [pastUserMatch, setPastUserMatch] = useState<PastUserMatch | null>(null);
+  const [pastUserStatus, setPastUserStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [pastUserError, setPastUserError] = useState<string | null>(null);
+  const [pastUserConfirmed, setPastUserConfirmed] = useState(false);
+  const [knownCaseStatus, setKnownCaseStatus] = useState<
+    "idle" | "loading" | "found" | "none" | "error"
+  >("idle");
+
+  const [directorInput, setDirectorInputState] = useState<DirectorInput>({
+    name: "",
+    customerDomain: "",
+    linkedin: "",
+  });
+  const setDirectorInput = (field: keyof DirectorInput, value: string) =>
+    setDirectorInputState((prev) => ({ ...prev, [field]: value }));
+  const [directorMatch, setDirectorMatch] = useState<DirectorMatch | null>(null);
+  const [directorStatus, setDirectorStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [directorError, setDirectorError] = useState<string | null>(null);
+  const [directorPicked, setDirectorPicked] = useState<Record<string, boolean>>({});
+  const [directorNamed, setDirectorNamed] = useState(false);
+
+  const campaignName =
+    mode === "pastUser" && pastUserMatch?.current
+      ? `${pastUserMatch.name} · ${pastUserMatch.oldCompany.name} → ${pastUserMatch.current.company} · past HROne user`
+      : mode === "director" && directorMatch
+        ? `${directorMatch.name} · director at ${directorMatch.customer.name} · other boards`
+        : `${seedName.trim() || "Campaign"} lookalikes · HR leaders · India`;
   const toggleRole = (r: string) =>
     setTargetRoles((prev) => (prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]));
   // Picked roles plus any free-text keywords, de-duplicated.
@@ -210,6 +322,198 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  // Rep-side corrections to the match (a better email, the right domain).
+  const setPastUserCurrent = (
+    field: keyof NonNullable<PastUserMatch["current"]>,
+    value: string
+  ) =>
+    setPastUserMatch((prev) =>
+      prev?.current ? { ...prev, current: { ...prev.current, [field]: value } } : prev
+    );
+
+  const enterPastUserManually = () =>
+    setPastUserMatch((prev) =>
+      prev
+        ? {
+            ...prev,
+            status: "moved",
+            current:
+              prev.status === "moved" && prev.current
+                ? prev.current
+                : { company: "", domain: "", title: "", email: "", linkedin: "", employees: "", location: "" },
+            emailWarning: undefined,
+          }
+        : prev
+    );
+
+  const lookupPastUser = async () => {
+    setPastUserStatus("loading");
+    setPastUserError(null);
+    setPastUserConfirmed(false);
+    try {
+      const res = await fetch("/api/past-users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pastUserInput),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Lookup failed");
+      setPastUserMatch(data.match);
+      setPastUserStatus("idle");
+    } catch (err) {
+      setPastUserError(err instanceof Error ? err.message : "Lookup failed");
+      setPastUserStatus("error");
+    }
+  };
+
+  // Looks for HROne's published case study about one known customer: the
+  // past user's old company, or the director's HROne company. Found → it
+  // fills the case study record; not found → the rep pastes notes, or the
+  // emails go out on the bare fact that the company uses HROne.
+  const findKnownCaseStudy = async (
+    customer = mode === "director" ? directorMatch?.customer : pastUserMatch?.oldCompany
+  ) => {
+    if (!customer) return;
+    setKnownCaseStatus("loading");
+    try {
+      const res = await fetch("/api/case-studies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerDomain: customer.domain,
+          customerName: customer.name,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Search failed");
+      const found: CaseStudyOption | undefined = (data.caseStudies ?? [])[0];
+      if (found) {
+        selectCaseStudy(found);
+        setKnownCaseStatus("found");
+      } else {
+        setKnownCaseStatus("none");
+      }
+    } catch (err) {
+      console.error("Known customer case study search failed", err);
+      setKnownCaseStatus("error");
+    }
+  };
+
+  const confirmPastUser = () => {
+    const match = pastUserMatch;
+    if (!match?.current) return;
+    const company: Company = {
+      id: `pastuser-${match.current.domain}`,
+      name: match.current.company,
+      domain: match.current.domain,
+      score: 100,
+      size: match.current.employees,
+      region: match.current.location,
+      fit: `${match.name} used HROne at ${match.oldCompany.name} and now works here`,
+    };
+    setPastUserConfirmed(true);
+    startKnownCustomerCampaign(match.oldCompany, [company]);
+  };
+
+  // Shared by past-user and director mode: one known customer becomes the
+  // case study, and `targets` are the only companies the campaign writes to.
+  const startKnownCustomerCampaign = (
+    customer: { name: string; domain: string },
+    targets: Company[]
+  ) => {
+    setSeedName(customer.name);
+    setSeedWebsite(customer.domain);
+    setCompanies(targets);
+    setPicked(Object.fromEntries(targets.map((c) => [c.id, true])));
+    // A fresh record for the customer: drop the client facts carried over
+    // from any earlier campaign, keep the HROne context, and allow naming —
+    // the emails are built on a known link to that company.
+    setAnswers((prev) => ({
+      ...Object.fromEntries(
+        CASE_QS.filter((q) => !CONTEXT_QS.includes(q.id)).map((q) => [q.id, ""])
+      ),
+      client_role: "",
+      name_allowed: "yes",
+      hrone_context: prev.hrone_context,
+    }));
+    setSelectedCaseStudyUrl(null);
+    setCaseContent("");
+    setContactGroups([]);
+    setSequences({});
+    setCompanyResearch({});
+    findKnownCaseStudy(customer);
+  };
+
+  const lookupDirector = async () => {
+    setDirectorStatus("loading");
+    setDirectorError(null);
+    try {
+      const res = await fetch("/api/directors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(directorInput),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Lookup failed");
+      const match: DirectorMatch = data.match;
+      setDirectorMatch(match);
+      // Board seats start ticked; roles that read like a job don't.
+      setDirectorPicked(
+        Object.fromEntries(match.companies.map((c) => [c.id, c.kind !== "job" && !!c.domain]))
+      );
+      setDirectorStatus("idle");
+    } catch (err) {
+      setDirectorError(err instanceof Error ? err.message : "Lookup failed");
+      setDirectorStatus("error");
+    }
+  };
+
+  const toggleDirectorCompany = (id: string) =>
+    setDirectorPicked((prev) => ({ ...prev, [id]: !prev[id] }));
+
+  const addDirectorCompany = (company: { name: string; domain: string; title: string }) => {
+    const domain = normalizeDomain(company.domain);
+    if (!directorMatch || !domain) return;
+    if (directorMatch.companies.some((c) => c.domain === domain)) return;
+    const id = `manual-${domain}`;
+    setDirectorMatch({
+      ...directorMatch,
+      companies: [
+        ...directorMatch.companies,
+        {
+          id,
+          name: company.name.trim() || domain,
+          domain,
+          title: company.title.trim() || "Director",
+          kind: "board",
+          employees: "",
+          location: "",
+          industry: "",
+          manual: true,
+        },
+      ],
+    });
+    setDirectorPicked((prev) => ({ ...prev, [id]: true }));
+  };
+
+  const confirmDirector = () => {
+    const match = directorMatch;
+    if (!match) return;
+    const targets: Company[] = match.companies
+      .filter((c) => directorPicked[c.id] && c.domain)
+      .map((c) => ({
+        id: `director-${c.domain}`,
+        name: c.name,
+        domain: c.domain,
+        score: 100,
+        size: c.employees,
+        region: c.location,
+        fit: `Shares a director with ${match.customer.name}, which already uses HROne`,
+      }));
+    if (targets.length === 0) return;
+    startKnownCustomerCampaign(match.customer, targets);
+  };
+
   const [companies, setCompanies] = useState<Company[]>([]);
   const [lookalikeStatus, setLookalikeStatus] = useState<"idle" | "loading" | "error">(
     "idle"
@@ -281,7 +585,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Search failed");
-      const groups: ContactGroup[] = data.groups ?? [];
+      const groups = withPastUser(data.groups ?? []);
       setContactGroups(groups);
       if (!groups.length) {
         setContactError(
@@ -295,6 +599,33 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
       setContactError(err instanceof Error ? err.message : "Search failed");
       setContactStatus("error");
     }
+  };
+
+  // Past-user mode: the person we're following always sits at the top of
+  // their new company's contacts, tagged so they get their own track — even
+  // when the HR search finds nobody else there.
+  const withPastUser = (groups: ContactGroup[]): ContactGroup[] => {
+    const current = pastUserMatch?.current;
+    if (mode !== "pastUser" || !current || !pastUserMatch) return groups;
+    const person = {
+      name: pastUserMatch.name,
+      title: current.title,
+      email: current.email,
+      linkedin: current.linkedin,
+      conf: current.email ? ("Verified" as const) : ("No email" as const),
+      pastUser: true,
+    };
+    const sameName = (n: string) => n.trim().toLowerCase() === person.name.trim().toLowerCase();
+    const existing = groups.find((g) => g.domain === current.domain);
+    if (!existing) {
+      return [
+        { company: current.company, domain: current.domain, score: 100, people: [person] },
+        ...groups,
+      ];
+    }
+    return groups.map((g) =>
+      g === existing ? { ...g, people: [person, ...g.people.filter((p) => !sameName(p.name))] } : g
+    );
   };
 
   // Step 2: reveal emails for the ticked contacts only. Unticked contacts are
@@ -475,6 +806,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [sequences, setSequences] = useState<Record<string, SequenceStep[]>>({});
+  const [companyResearch, setCompanyResearch] = useState<Record<string, ResearchSource[]>>({});
   const [activeDomainState, setActiveSequenceDomain] = useState<string | null>(null);
   // Falls back to the first company with a draft, so the page never shows an
   // empty pane while drafts exist.
@@ -518,7 +850,32 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   const setStepFramework = (index: number, framework: FrameworkId) =>
     setStepFrameworks((prev) => prev.map((f, i) => (i === index ? framework : f)));
 
-  const draftSequence = async (company: SequenceCompany | null): Promise<SequenceStep[]> => {
+  // In past-user mode every company sequence is the HR team's track, and
+  // the person themselves gets the "pastUser" track.
+  const draftSequence = async (
+    company: SequenceCompany | null,
+    track: "team" | "pastUser" = "team"
+  ): Promise<SequenceStep[]> => {
+    const pastUser =
+      mode === "pastUser" && pastUserMatch?.current
+        ? {
+            name: pastUserMatch.name,
+            title: pastUserMatch.current.title,
+            oldCompany: pastUserMatch.oldCompany.name,
+          }
+        : null;
+    // Director mode: who links this company to the HROne customer, and
+    // their title here.
+    const director =
+      mode === "director" && directorMatch
+        ? {
+            name: directorMatch.name,
+            customer: directorMatch.customer.name,
+            titleHere:
+              directorMatch.companies.find((c) => c.domain === company?.domain)?.title ?? "",
+            named: directorNamed,
+          }
+        : null;
     const res = await fetch("/api/sequence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -530,20 +887,31 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         frameworks: stepFrameworks,
         brief: campaignBrief,
         company,
+        ...(pastUser && { pastUser, track }),
+        ...(director && { director }),
       }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Sequence generation failed");
+    if (company) setCompanyResearch((prev) => ({ ...prev, [company.domain]: data.research ?? [] }));
     return data.steps ?? [];
   };
 
   // Drafts every company's sequence, a few at a time. Each draft lands as
   // soon as it's ready, and one company failing doesn't lose the others.
+  // Past-user mode adds one more job: the past user's own track.
   const generateSequence = async () => {
     setSequenceStatus("loading");
     setSequenceError(null);
-    const targets: (SequenceCompany | null)[] =
+    type Job = { company: SequenceCompany | null; track: "team" | "pastUser" };
+    const companyTargets: (SequenceCompany | null)[] =
       sequenceCompanies.length > 0 ? sequenceCompanies : [null];
+    const targets: Job[] = [
+      ...(mode === "pastUser" && sequenceCompanies[0]
+        ? [{ company: sequenceCompanies[0], track: "pastUser" as const }]
+        : []),
+      ...companyTargets.map((company) => ({ company, track: "team" as const })),
+    ];
     setSequences({});
     setActiveSequenceDomain(null);
     setSequenceProgress({ done: 0, total: targets.length });
@@ -552,13 +920,18 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     let next = 0;
     const worker = async () => {
       while (next < targets.length) {
-        const company = targets[next++];
+        const { company, track } = targets[next++];
         try {
-          const steps = await draftSequence(company);
-          setSequences((prev) => ({ ...prev, [company?.domain ?? SHARED_SEQUENCE]: steps }));
+          const steps = await draftSequence(company, track);
+          const key =
+            track === "pastUser" ? PAST_USER_SEQUENCE : (company?.domain ?? SHARED_SEQUENCE);
+          setSequences((prev) => ({ ...prev, [key]: steps }));
         } catch (err) {
           failed.push({
-            name: company?.name ?? "the campaign",
+            name:
+              track === "pastUser"
+                ? `${pastUserMatch?.name ?? "the past user"}'s own track`
+                : (company?.name ?? "the campaign"),
             error: err instanceof Error ? err.message : "Sequence generation failed",
           });
         }
@@ -600,6 +973,24 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     setSequenceProgress({ done: 1, total: 1 });
   };
 
+  const redraftPastUserTrack = async () => {
+    const company = sequenceCompanies[0];
+    if (!company) return;
+    setSequenceStatus("loading");
+    setSequenceError(null);
+    setSequenceProgress({ done: 0, total: 1 });
+    try {
+      const steps = await draftSequence(company, "pastUser");
+      setSequences((prev) => ({ ...prev, [PAST_USER_SEQUENCE]: steps }));
+      setActiveSequenceDomain(PAST_USER_SEQUENCE);
+      setSequenceStatus("idle");
+    } catch (err) {
+      setSequenceError(err instanceof Error ? err.message : "Sequence generation failed");
+      setSequenceStatus("error");
+    }
+    setSequenceProgress({ done: 1, total: 1 });
+  };
+
   const [checks, setChecks] = useState(REVIEW_CHECKS.map(() => false));
   const toggleCheck = (index: number) =>
     setChecks((prev) => prev.map((v, i) => (i === index ? !v : v)));
@@ -607,6 +998,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   const [launchStatus, setLaunchStatus] = useState<"idle" | "loading" | "error">("idle");
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [smartleadCampaignUrl, setSmartleadCampaignUrl] = useState<string | null>(null);
+  const [pastUserCampaignUrl, setPastUserCampaignUrl] = useState<string | null>(null);
   const [leadsSent, setLeadsSent] = useState(0);
   const [sendingStarted, setSendingStarted] = useState(false);
 
@@ -619,6 +1011,31 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
     if (!checks.every(Boolean)) return;
     setLaunchStatus("loading");
     setLaunchError(null);
+    const toStepsIn = (steps: SequenceStep[]) =>
+      steps.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
+        day,
+        subject,
+        preheader,
+        hook,
+        content,
+        cta,
+        ps,
+      }));
+    // Past-user mode: the person goes to Smartlead with their own track.
+    const pastUserPerson =
+      mode === "pastUser"
+        ? contactGroups.flatMap((g) => g.people).find((p) => p.pastUser && p.email)
+        : undefined;
+    const pastUser =
+      pastUserPerson && pastUserMatch?.current && sequences[PAST_USER_SEQUENCE]
+        ? {
+            name: pastUserPerson.name,
+            title: pastUserPerson.title,
+            email: pastUserPerson.email,
+            company: pastUserMatch.current.company,
+            steps: toStepsIn(sequences[PAST_USER_SEQUENCE]),
+          }
+        : undefined;
     try {
       const res = await fetch("/api/smartlead/launch", {
         method: "POST",
@@ -628,34 +1045,28 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
           seedName,
           seedWebsite,
           sequences: Object.fromEntries(
-            Object.entries(sequences).map(([domain, steps]) => [
-              domain,
-              steps.map(({ day, subject, preheader, hook, content, cta, ps }) => ({
-                day,
-                subject,
-                preheader,
-                hook,
-                content,
-                cta,
-                ps,
-              })),
-            ])
+            Object.entries(sequences)
+              .filter(([key]) => key !== PAST_USER_SEQUENCE)
+              .map(([domain, steps]) => [domain, toStepsIn(steps)])
           ),
           groups: contactGroups.map(({ company, domain, people }) => ({
             company,
             domain,
-            people: people.map(({ name, title, email, phone }) => ({
+            people: people.map(({ name, title, email, phone, pastUser }) => ({
               name,
               title,
               email,
               phone,
+              pastUser,
             })),
           })),
+          pastUser,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Smartlead launch failed");
-      setSmartleadCampaignUrl(data.campaignUrl ?? null);
+      setSmartleadCampaignUrl(data.teamCampaignUrl ?? data.campaignUrl ?? null);
+      setPastUserCampaignUrl(data.pastUserCampaignUrl ?? null);
       setLeadsSent(data.leadsAdded ?? 0);
       setSendingStarted(!!data.started);
       setLaunchStatus("idle");
@@ -669,6 +1080,33 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
   return (
     <WizardContext.Provider
       value={{
+        mode,
+        setMode,
+        steps,
+        pastUserInput,
+        setPastUserInput,
+        pastUserMatch,
+        setPastUserCurrent,
+        pastUserStatus,
+        pastUserError,
+        lookupPastUser,
+        enterPastUserManually,
+        confirmPastUser,
+        pastUserConfirmed,
+        knownCaseStatus,
+        findKnownCaseStudy: () => findKnownCaseStudy(),
+        directorInput,
+        setDirectorInput,
+        directorMatch,
+        directorStatus,
+        directorError,
+        lookupDirector,
+        directorPicked,
+        toggleDirectorCompany,
+        addDirectorCompany,
+        directorNamed,
+        setDirectorNamed,
+        confirmDirector,
         seedName,
         seedWebsite,
         setSeedName,
@@ -719,6 +1157,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         addContact,
         sequenceCompanies,
         sequences,
+        companyResearch,
         activeSequenceDomain,
         setActiveSequenceDomain,
         sequenceProgress,
@@ -728,6 +1167,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         sequenceStatus,
         sequenceError,
         generateSequence,
+        redraftPastUserTrack,
         campaignTypeId,
         setCampaignTypeId,
         stepFrameworks,
@@ -740,6 +1180,7 @@ export function WizardProvider({ children }: { children: React.ReactNode }) {
         launchStatus,
         launchError,
         smartleadCampaignUrl,
+        pastUserCampaignUrl,
         leadsSent,
         sendingStarted,
         launch,

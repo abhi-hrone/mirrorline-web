@@ -242,6 +242,37 @@ export const CAMPAIGN_TYPES: CampaignType[] = [
 
 export const DEFAULT_CAMPAIGN_TYPE = CAMPAIGN_TYPES[0];
 
+// The past user's own track in past-user mode. Not offered in the campaign
+// type picker: it only makes sense written to someone who has used HROne
+// before, and its plan is fixed. The HR team at their new company gets the
+// type picked on the Sequence step, starting a few days later.
+export const PAST_USER_CAMPAIGN_TYPE: CampaignType = {
+  id: "past_user",
+  label: "Past HROne user",
+  goal: "Get someone who used HROne at their previous company to bring it to their new one.",
+  ask: "a 15-minute call to see how HROne would fit their new company",
+  guidance:
+    "This person already knows HROne from their previous employer, so never explain what HROne is from scratch. Write like someone picking up an old professional relationship: warm, brief, specific to their move.",
+  needsBrief: false,
+  briefHint: "Optional — anything every email should mention",
+  plan: [
+    {
+      day: 0,
+      purpose: "Congratulate the move, connect it to HROne",
+      note: "Open on their new role at {{company}}. Remind them, in one line, of what HROne did at their previous company, then ask how HR and payroll run at the new one.",
+      framework: "Curiosity-led",
+    },
+    {
+      day: 4,
+      purpose: "What it took at their old company",
+      note: "Retell the old company's before/after in a few lines, as something they saw first-hand — without claiming they led the project.",
+      framework: "BAB",
+    },
+    { day: 9, purpose: "Closing note", framework: "Founder note" },
+  ],
+};
+
 export function campaignTypeById(id: unknown): CampaignType {
+  if (id === PAST_USER_CAMPAIGN_TYPE.id) return PAST_USER_CAMPAIGN_TYPE;
   return CAMPAIGN_TYPES.find((t) => t.id === id) ?? DEFAULT_CAMPAIGN_TYPE;
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useWizard } from "@/lib/wizard-context";
 import { ALL_HR_ROLES, HR_ROLE_GROUPS } from "@/lib/hr-roles";
+import WizardModeToggle from "@/components/WizardModeToggle";
 
 export default function SeedPage() {
   const { seedName, seedWebsite, setSeedName, setSeedWebsite, targetTitles,
@@ -16,6 +17,7 @@ export default function SeedPage() {
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[1060px] flex-col gap-5">
+        <WizardModeToggle mode="customer" />
         <p className="max-w-[640px] text-[15px] leading-relaxed text-[#55513F]">
           The customer this campaign is built around. Ocean uses the website
           to find lookalikes.

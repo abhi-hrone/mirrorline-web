@@ -73,6 +73,24 @@ function buildQuery(prospectUrl: string) {
   );
 }
 
+// Past-user mode: the case study has to be about this exact customer — the
+// person's old company — not one that merely resembles it.
+function buildCustomerQuery(customerDomain: string, customerName: string) {
+  return (
+    "Find the case study or customer success story published by hrone.cloud " +
+    `(HROne, an HR and payroll SaaS platform for Indian businesses) about the ` +
+    `customer ${customerName ? `${customerName} (${customerDomain})` : customerDomain}. ` +
+    "Only return a case study about that exact company — never a different " +
+    "customer, even a similar one. If HROne has not published one, return an " +
+    "empty list. For the case study, return the customer, their industry, " +
+    "employee headcount, number of locations or states, how they managed HR " +
+    "and payroll before HROne, the problems they faced, which HROne modules " +
+    "were implemented, how HROne solved those problems, the results after " +
+    "go-live with any numbers stated, the role of the customer contact quoted, " +
+    "and the source URL."
+  );
+}
+
 export const POST = withRequestLog("case-studies", async (req: NextRequest) => {
   const apiKey = process.env.EXA_API_KEY;
   if (!apiKey) {
@@ -84,11 +102,18 @@ export const POST = withRequestLog("case-studies", async (req: NextRequest) => {
 
   const body = await req.json().catch(() => ({}));
   const prospectUrl = typeof body.prospectUrl === "string" ? body.prospectUrl.trim() : "";
-  if (!prospectUrl) {
-    return NextResponse.json({ error: "prospectUrl is required." }, { status: 400 });
+  const customerDomain =
+    typeof body.customerDomain === "string" ? normalizeDomain(body.customerDomain) : "";
+  const customerName = typeof body.customerName === "string" ? body.customerName.trim() : "";
+  if (!prospectUrl && !customerDomain) {
+    return NextResponse.json(
+      { error: "prospectUrl or customerDomain is required." },
+      { status: 400 }
+    );
   }
 
-  const domain = normalizeDomain(prospectUrl);
+  // The two searches answer different questions, so they're cached apart.
+  const domain = customerDomain ? `customer:${customerDomain}` : normalizeDomain(prospectUrl);
   const cached = await getCachedCaseStudies(domain).catch((err) => {
     console.error("Case studies cache lookup failed", err);
     return null;
@@ -101,7 +126,9 @@ export const POST = withRequestLog("case-studies", async (req: NextRequest) => {
 
   try {
     const run = await exa.agent.runs.create({
-      query: buildQuery(prospectUrl),
+      query: customerDomain
+        ? buildCustomerQuery(customerDomain, customerName)
+        : buildQuery(prospectUrl),
       outputSchema: OUTPUT_SCHEMA,
     });
     const completed = await exa.agent.runs.pollUntilFinished(run.id);

@@ -5,21 +5,27 @@ import { z } from "zod/v4";
 import { CASE_QS, CONTEXT_QS } from "@/lib/mock-data";
 import {
   FRAMEWORK_BY_ID,
+  PAST_USER_CAMPAIGN_TYPE,
   campaignTypeById,
   isFrameworkId,
   type PlanStep,
 } from "@/lib/sequence-options";
 import { withRequestLog } from "@/lib/logger";
+import { researchCompany } from "@/lib/company-research";
 
 export const maxDuration = 120;
 
 // Field order matters: structured output is generated top to bottom, so
-// "connection" comes first to make the model commit to how this email
-// continues the last one before it writes the hook.
+// "connection" and "research_used" come first to make the model commit to
+// how this email continues the last one, and which research finding it
+// opens with, before it writes the hook.
 const StepSchema = z.object({
   connection: z
     .string()
     .describe("Email 1: empty string. From email 2 on: one line naming the specific point, number or question from the previous email that this one picks up and carries forward"),
+  research_used: z
+    .array(z.number().int())
+    .describe("The number of the web research finding (R1 = 1, R2 = 2, …) this email mentions, as a one-item array, or an empty array when it uses none. Email 1 must use one whenever any web research is supplied"),
   day: z.number().int().min(0).describe("Days after the first email sends (0 for the first email)"),
   framework: z
     .string()
@@ -32,10 +38,10 @@ const StepSchema = z.object({
     .describe("One short line that extends the subject rather than repeating it — the preview text after the subject"),
   hook: z
     .string()
-    .describe("1-2 sentences that earn the next line. Must be about the recipient's situation, never about HROne. From email 2 on, it picks up naturally from the previous email"),
+    .describe("1-2 sentences that earn the next line. Must be about the recipient's situation, never about HROne. When research_used is not empty, the hook mentions that finding. From email 2 on, it picks up naturally from the previous email"),
   content: z
     .string()
-    .describe("The body, written to this step's framework. Must only state facts present in the supplied case study answers or campaign brief — never invent metrics, names, dates, prices or outcomes"),
+    .describe("The body, written to this step's framework. Must only state facts present in the supplied case study answers, campaign brief or web research — never invent metrics, names, dates, prices or outcomes"),
   cta: z
     .string()
     .describe("Exactly one ask, phrased as a question, pointing at the campaign's ask"),
@@ -51,9 +57,37 @@ const SequenceSchema = z.object({
   steps: z.array(StepSchema).min(1).max(6),
 });
 
+// Past-user mode: one person who used HROne at their previous company, now
+// at the target company. "pastUser" is the track written to them; "team" is
+// the track written to the HR team at their new company, which names them.
+type PastUser = { name: string; title: string; oldCompany: string; track: "pastUser" | "team" };
+
+function pastUserRules(p: PastUser, oldCompanyLabel: string) {
+  const first = p.name.split(/\s+/)[0];
+  const role = p.title ? ` as ${p.title}` : "";
+  return p.track === "pastUser"
+    ? `PAST USER TRACK: this sequence goes to one person, ${p.name}, who used HROne at their previous company, ${p.oldCompany}, and recently joined {{company}}${role}. Address them with {{firstName}}. Email 1 opens on their move to {{company}}. The case study is ${p.oldCompany}'s story — always name ${p.oldCompany} to them, they worked there. They likely saw it first-hand, but never claim they led, chose or ran the project, or how they felt about HROne. They already know HROne: never explain it from scratch. The case study's numbers belong to ${p.oldCompany}, never to {{company}}.`
+    : `PAST USER: ${p.name} recently joined {{company}}${role} from ${oldCompanyLabel}, where they used HROne. Email 1 must mention this in its hook or body — for example "${first} joined {{company}} from ${oldCompanyLabel}, where the team ran payroll on HROne" — and at most one later email may mention it again. Never claim ${first} recommended HROne, asked us to reach out, knows about this email, or holds any view about HROne; never quote or speak for them. Refer to them by name or as "they" — never "he" or "she", since their pronouns aren't known. ${p.name} does not receive this sequence — the recipient is a colleague of theirs.`;
+}
+
+// Director mode: the target company shares a director with an HROne
+// customer. The sequence goes to the HR team there, not to the director.
+// `named` is the rep's call on whether the emails may name the director.
+type Director = { name: string; customer: string; titleHere: string; named: boolean };
+
+function directorRules(d: Director, customerLabel: string) {
+  const first = d.name.split(/\s+/)[0];
+  const role = d.titleHere ? `, ${d.titleHere} at {{company}},` : "";
+  const never = `Never claim the director recommended HROne, asked us to reach out, knows about this email, or holds any view about HROne; never quote or speak for them. Never claim ${customerLabel} and {{company}} share anything else — staff, payroll, systems or ownership. The director does not receive this sequence — the recipient works at {{company}}.`;
+  return d.named
+    ? `DIRECTOR: ${d.name}${role} is also a director of ${customerLabel}, which runs its HR and payroll on HROne. Email 1 must mention this link in its hook or body — for example "${customerLabel}, where ${first} is also on the board, runs payroll on HROne" — and at most one later email may mention it again. Refer to them by name or as "they" — never "he" or "she", since their pronouns aren't known. ${never}`
+    : `SHARED BOARD: {{company}} shares a director with ${customerLabel}, which runs its HR and payroll on HROne. Email 1 must mention this link in its hook or body — for example "${customerLabel}, which shares a board member with {{company}}, runs payroll on HROne" — and at most one later email may mention it again. Never name, describe or hint at who that director is: no name, initials, title or role. ${never}`;
+}
+
 // perCompany: the sequence is drafted for one named lookalike company rather
-// than as a template for every company in the campaign.
-const systemPrompt = (perCompany: boolean) => `You are an expert B2B email writer for HROne, an HR and payroll software company selling to Indian businesses. You write email sequences to decision-makers at Indian companies that are not HROne customers yet, built on one approved customer case study.
+// than as a template for every company in the campaign. extraRules: the
+// past-user or director rules, when the campaign has one.
+const systemPrompt = (perCompany: boolean, extraRules: string) => `You are an expert B2B email writer for HROne, an HR and payroll software company selling to Indian businesses. You write email sequences to decision-makers at Indian companies that are not HROne customers yet, built on one approved customer case study.
 
 Each request gives you the campaign type, its goal, the one thing every email asks for, and a plan: for each email, its send day, its purpose in the sequence, and the copywriting framework it must follow, with that framework's structure spelled out. Write each email's body to its own framework — the structure is the skeleton, not a set of labels to print. Return exactly as many emails as the plan lists, in that order — no extra step, no repeated step.
 
@@ -63,7 +97,7 @@ ONE CONVERSATION: the sequence reads as one thread, not separate emails. From em
 
 WHOSE NUMBERS: the case study's headcount, locations, problems and results belong to the case study client, never to the recipient. ${
   perCompany
-    ? "The request lists the few facts known about the recipient's company — state only those, word for word. Anything else about them (plants, states, payroll process, problems) you don't know, so ask or imagine it rather than asserting it."
+    ? "The request lists the facts known about the recipient's company, including any web research on it — state only those, as given. Anything else about them (plants, states, payroll process, problems) you don't know, so ask or imagine it rather than asserting it."
     : "Don't tell the recipient how many employees or plants they have — you don't know."
 } Say what the client had, and ask or imagine what the recipient's version looks like.
 
@@ -71,11 +105,14 @@ EMAIL PARTS: every email has a subject, a preheader that extends the subject ins
 
 RULES:
 - Under 90 words in "content". Plain text, no formatting, no emojis, no exclamation points.
+- No greeting or sign-off: "Hi {{firstName}}," is added above the hook automatically, so never start the hook or content with one.
+- Never tell the reader what you don't know, can't verify or won't assume ("I don't have verified results", "I can't claim"). Write around missing facts.
 - Write like a person, not a marketer. Simple, direct Indian business English.
 - The hook must be about the recipient, never about HROne or the sender. Make it concrete — what their month-end, their plants, their states or their headcount actually looks like — not a general observation about HR.
 ${
   perCompany
-    ? "- This sequence is written for one company and sent to several people there. Make it unmistakably about that company — its size, region and why it resembles the case study client — not a template that could go anywhere. Use the merge tokens {{firstName}}, {{title}} and {{company}} for the recipient — never invent a recipient's name."
+    ? `- This sequence is written for one company and sent to several people there. Make it unmistakably about that company — its size, region and why it resembles the case study client — not a template that could go anywhere. Use the merge tokens {{firstName}}, {{title}} and {{company}} for the recipient — never invent a recipient's name.
+- WEB RESEARCH: when the request includes web research on the company, email 1's hook MUST open with one finding — this is what makes the email personal, so never skip it. Pick the finding with the strongest link to HR and payroll: growth in their workforce — a hiring push or open roles (careers pages count), a new plant or office, an expansion, funding, an acquisition — beats a description of what they do, but a specific website fact (what they build, who they sell to, where they operate) is still far better than nothing. Use the specific detail ("hiring engineers and sales for its AI CX platform"), not a compliment ("excels in software development"). Tie it to what the case study client went through. Later emails may use a different finding — never more than one per email, never the same one twice. Mention it the way a person who looked them up would ("saw {{company}} is opening the Pune plant", "noticed {{company}} builds telecom software for carriers"), keep facts and dates exactly as given, and say only what the research says. The research never tells you how they run HR or payroll today — don't claim they use spreadsheets or struggle with payroll; ask or imagine instead. Never use negative news (layoffs, losses, lawsuits).`
     : "- This is a template sent to many recipients across many companies, not one person. Personalize with the merge tokens {{firstName}}, {{title}} and {{company}} — never invent a recipient's name or company."
 }
 - Speak to the recipient's role: HR cares about effort and employee experience, finance cares about accuracy and cost, founders and COOs care about scale and risk.
@@ -86,7 +123,9 @@ ${
 - Name the client only if naming is cleared in the case study record. Otherwise use the exact description you are given for them, and keep every number attached to that description — never "one HR team" or "a company we work with".
 - Amounts in INR with "+GST" where pricing comes up. Never quote a price that is not in the HROne context or the campaign brief.
 - Vary the angle across steps so the sequence does not repeat itself, and never repeat the same number in the same words twice.
-- Avoid these words and anything built on them: revolutionize, cutting-edge, seamless or seamlessly, game-changing, streamline, leverage, empower, "just following up", "quick question", "I hope this email finds you well", "imagine if".`;
+- Avoid these words and anything built on them: revolutionize, cutting-edge, seamless or seamlessly, game-changing, streamline, leverage, empower, "just following up", "quick question", "I hope this email finds you well", "imagine if".${extraRules ? `
+
+${extraRules}` : ""}`;
 
 export const POST = withRequestLog("sequence", async (req: NextRequest) => {
   const apiKey = process.env.AZURE_OPENAI_KEY;
@@ -111,11 +150,38 @@ export const POST = withRequestLog("sequence", async (req: NextRequest) => {
   const targetDepartments: string[] = Array.isArray(body.targetDepartments)
     ? body.targetDepartments.filter((d: unknown) => typeof d === "string")
     : [];
-  const campaignType = campaignTypeById(body.campaignType);
+  const rawPastUser = body.pastUser && typeof body.pastUser === "object" ? body.pastUser : null;
+  const pastUserField = (key: string) =>
+    rawPastUser && typeof rawPastUser[key] === "string" ? (rawPastUser[key] as string).trim() : "";
+  const pastUser: PastUser | null =
+    pastUserField("name") && pastUserField("oldCompany")
+      ? {
+          name: pastUserField("name"),
+          title: pastUserField("title"),
+          oldCompany: pastUserField("oldCompany"),
+          track: body.track === "pastUser" ? "pastUser" : "team",
+        }
+      : null;
+  const rawDirector = body.director && typeof body.director === "object" ? body.director : null;
+  const directorField = (key: string) =>
+    rawDirector && typeof rawDirector[key] === "string" ? (rawDirector[key] as string).trim() : "";
+  const director: Director | null =
+    !pastUser && directorField("name") && directorField("customer")
+      ? {
+          name: directorField("name"),
+          customer: directorField("customer"),
+          titleHere: directorField("titleHere"),
+          named: rawDirector?.named === true,
+        }
+      : null;
+  const pastUserTrack = pastUser?.track === "pastUser";
+  // The past user's own track always follows its fixed plan.
+  const campaignType = pastUserTrack ? PAST_USER_CAMPAIGN_TYPE : campaignTypeById(body.campaignType);
   const brief = typeof body.brief === "string" ? body.brief.trim() : "";
   // Days and purposes are the campaign type's; only the framework per step
   // is the user's choice, and an unknown one falls back to the default.
-  const requested: unknown[] = Array.isArray(body.frameworks) ? body.frameworks : [];
+  const requested: unknown[] =
+    Array.isArray(body.frameworks) && !pastUserTrack ? body.frameworks : [];
   const plan: PlanStep[] = campaignType.plan.map((step, i) => {
     const chosen = requested[i];
     return { ...step, framework: isFrameworkId(chosen) ? chosen : step.framework };
@@ -138,6 +204,15 @@ export const POST = withRequestLog("sequence", async (req: NextRequest) => {
       }
     : null;
 
+  // Researched up front so a slow or failed search can't eat into the
+  // drafting call's time — and failure just means drafting without it.
+  const research = company
+    ? await researchCompany(company.name, company.domain).catch((err) => {
+        console.error("Company research failed", err);
+        return [];
+      })
+    : [];
+
   if (campaignType.needsBrief && !brief) {
     return NextResponse.json(
       { error: `A ${campaignType.label} campaign needs a brief: ${campaignType.briefHint}.` },
@@ -156,7 +231,11 @@ export const POST = withRequestLog("sequence", async (req: NextRequest) => {
     .map((q) => ({ label: q.label, value: valueFor(q.id) }))
     .filter((a) => a.value.length > 0);
 
-  if (filledAnswers.length === 0) {
+  // Past-user and director mode can draft with no case study at all: all we
+  // then know is that the person used HROne at their old company, or that
+  // the director's other company uses HROne.
+  const minimalCase = filledAnswers.length === 0 && (!!pastUser || !!director);
+  if (filledAnswers.length === 0 && !minimalCase) {
     return NextResponse.json(
       { error: "No case study answers to draft from — fill in the case study record first." },
       { status: 400 }
@@ -177,7 +256,11 @@ export const POST = withRequestLog("sequence", async (req: NextRequest) => {
   ].join(" ");
   const clientLabel = nameAllowed ? seedName || "the approved customer" : anonymousLabel;
 
-  const caseStudyText = filledAnswers.map((a) => `- ${a.label} ${a.value}`).join("\n");
+  const caseStudyText = minimalCase && director
+    ? `- No case study is available for ${director.customer}. The only fact: ${director.customer} uses HROne and shares a director with {{company}}. State no numbers, modules, problems, results or quotes for ${director.customer}, and make email 1's subject about {{company}} rather than an outcome. Never tell the reader what you don't know, can't claim or won't assume — just write around it: lean on the shared board, the web research, and the HROne context.`
+    : minimalCase
+    ? `- No case study is available for ${pastUser?.oldCompany}. The only fact: ${pastUser?.name} used HROne there. State no numbers, modules, problems, results or quotes for that company, and make email 1's subject about their move to {{company}} rather than an outcome. Never tell the reader what you don't know, can't claim or won't assume — just write around it: lean on their first-hand experience of HROne, their new role, the web research, and the HROne context.`
+    : filledAnswers.map((a) => `- ${a.label} ${a.value}`).join("\n");
   const contextText = [
     valueFor("client_role") && `- ${labelFor("client_role")} ${valueFor("client_role")}`,
     `- Naming: ${
@@ -198,11 +281,19 @@ ${valueFor("hrone_context")}`,
     .filter(Boolean)
     .join("\n");
 
+  // With no case study, a step built on the client's story has nothing to
+  // tell — the model then fills the email with what it doesn't know. Point
+  // those steps at the HROne context instead.
+  const STORY_FRAMEWORKS = ["BAB", "Storytelling", "Social proof-led", "4Ps"];
+  const minimalNote = (framework: string) =>
+    minimalCase && STORY_FRAMEWORKS.includes(framework)
+      ? ` NO CASE STUDY: there is no story or result to tell, so instead answer the question of fit at {{company}} from the HROne context (modules, statutory compliance, integrations, time to go live), tied to the web research${pastUser ? " or their new role" : ""}.`
+      : "";
   const planText = plan
     .map((step, i) => {
       const f = FRAMEWORK_BY_ID[step.framework];
       const link = i > 0 ? ` Picks up where email ${i} left off.` : "";
-      const note = `${link}${step.note ? ` ${step.note}` : ""}`;
+      const note = `${link}${minimalCase && STORY_FRAMEWORKS.includes(step.framework) ? "" : step.note ? ` ${step.note}` : ""}${minimalNote(step.framework)}`;
       return `- Email ${i + 1} (Day ${step.day}, ${step.purpose}) — ${f.id}: ${f.structure}. ${f.instruction}${note}`;
     })
     .join("\n");
@@ -218,10 +309,21 @@ ${valueFor("hrone_context")}`,
         .join("\n")
     : "";
 
+  const findings = research.slice(0, 6);
+  const researchText = findings
+    .map(
+      (f, i) =>
+        `- R${i + 1} [${f.source === "news" ? `News${f.publishedDate ? `, ${f.publishedDate}` : ""}` : "Company website"}] ${f.summary} (${f.url})`
+    )
+    .join("\n");
+
   const sourceLabels = [
     ...filledAnswers.map((a) => a.label),
     ...(brief ? ["Campaign brief"] : []),
     ...(company ? ["Target company"] : []),
+    ...(researchText ? ["Company research"] : []),
+    ...(pastUser ? ["Past user"] : []),
+    ...(director ? ["Director"] : []),
   ];
 
   const userPrompt = `CASE STUDY (from the implementation consultant):
@@ -240,7 +342,14 @@ ${
     ? `- Everyone receiving this works at the company below; write to their role, and use {{firstName}}, {{title}} and {{company}}.
 
 TARGET COMPANY (all that is known about it — state nothing else about them as fact):
-${companyText}`
+${companyText}${
+        researchText
+          ? `
+
+WEB RESEARCH ON ${company.name.toUpperCase()} (today is ${new Date().toISOString().slice(0, 10)}; email 1 must open with one of these; at most one per email, as given, with its number in "research_used"):
+${researchText}`
+          : ""
+      }`
     : "- The same sequence goes to every recipient, so write to the role, not to a person, and use {{firstName}}, {{title}} and {{company}}."
 }
 
@@ -273,7 +382,17 @@ Write exactly ${numSteps} emails, in that order, using only the facts above. The
     const completion = await client.chat.completions.parse({
       model: deployment as string,
       messages: [
-        { role: "system", content: systemPrompt(!!company) },
+        {
+          role: "system",
+          content: systemPrompt(
+            !!company,
+            pastUser
+              ? pastUserRules(pastUser, nameAllowed ? pastUser.oldCompany : "their previous company")
+              : director
+                ? directorRules(director, nameAllowed ? director.customer : "another company on the same board")
+                : ""
+          ),
+        },
         { role: "user", content: userPrompt },
       ],
       response_format: zodResponseFormat(SequenceSchema, "email_sequence"),
@@ -301,13 +420,30 @@ Write exactly ${numSteps} emails, in that order, using only the facts above. The
       cta: s.cta,
       ps: s.ps,
       sources: s.sources,
+      // The pages behind any research the email cites, so the reviewer can
+      // check the claim before it goes out. Unknown numbers are dropped.
+      research: [...new Set(s.research_used)]
+        .map((n) => findings[n - 1])
+        .filter(Boolean)
+        .map(({ title, url, publishedDate, source }) => ({ title, url, publishedDate, source })),
       connection: i > 0 ? s.connection : "",
       // A step missing its ask or its sourcing is the reviewer's problem to
       // fix, so flag it rather than letting it pass as drafted.
       state: s.cta.trim() && s.sources.length > 0 ? ("Drafted" as const) : ("Needs edit" as const),
     }));
 
-    return NextResponse.json({ steps });
+    // Everything found, used or not, so the reviewer can see what the web
+    // turned up for this company.
+    return NextResponse.json({
+      steps,
+      research: findings.map(({ title, url, publishedDate, source, summary }) => ({
+        title,
+        url,
+        publishedDate,
+        source,
+        summary,
+      })),
+    });
   } catch (err) {
     console.error("Sequence generation failed", err);
     return NextResponse.json(

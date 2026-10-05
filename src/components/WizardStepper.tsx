@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { WIZARD_STEPS } from "@/lib/mock-data";
+import { useWizard } from "@/lib/wizard-context";
 
 export default function WizardStepper() {
   const pathname = usePathname();
-  const currentIndex = WIZARD_STEPS.findIndex((s) =>
+  const { steps } = useWizard();
+  const currentIndex = steps.findIndex((s) =>
     pathname.endsWith(`/${s.key}`)
   );
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {WIZARD_STEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const active = i === currentIndex;
         const done = currentIndex > -1 && i < currentIndex;
         return (

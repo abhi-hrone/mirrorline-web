@@ -21,7 +21,9 @@ export default function ContactsPage() {
     addContact,
     companies,
     picked,
+    mode,
   } = useWizard();
+  const pickStep = mode === "pastUser" ? "Past user" : mode === "director" ? "Director" : "Lookalikes";
   const pickedCount = pickedCompanies(companies, picked).length;
 
   // Search on first arrival instead of waiting for a click; the ref keeps
@@ -101,10 +103,10 @@ export default function ContactsPage() {
         {contactGroups.length === 0 && !contactError && (
           <p className="rounded-[10px] border border-line bg-white px-5 py-6 text-[13.5px] text-[#55513F]">
             {pickedCount === 0
-              ? "No companies selected. Pick some on the Lookalikes step first."
+              ? `No companies selected. Pick some on the ${pickStep} step first.`
               : contactStatus === "loading"
                 ? `Finding contacts at ${pickedCount} ${pickedCount === 1 ? "company" : "companies"}… Emails are revealed in a second step, only for the contacts you tick.`
-                : "No contacts found at the selected companies. Try “Find contacts” again, or pick different companies on the Lookalikes step."}
+                : `No contacts found at the selected companies. Try “Find contacts” again, or pick different companies on the ${pickStep} step.`}
           </p>
         )}
 
@@ -160,6 +162,14 @@ export default function ContactsPage() {
                 />
                 <span className="min-w-0 overflow-hidden text-ellipsis text-[13.5px] font-semibold">
                   {p.name}
+                  {p.pastUser && (
+                    <span
+                      title="Gets their own email track"
+                      className="ml-1.5 rounded-full border border-[#E5DAC0] bg-[#F2EDDF] px-[7px] py-px align-middle text-[10px] font-medium text-[#7A5B27]"
+                    >
+                      Past user
+                    </span>
+                  )}
                 </span>
                 <span className="min-w-0 text-[13px] text-[#55513F]">
                   {p.title}

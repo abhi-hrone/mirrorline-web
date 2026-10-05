@@ -1,21 +1,121 @@
-export const WIZARD_STEPS = [
-  { key: "seed", label: "Customer" },
-  { key: "case", label: "Case study" },
-  { key: "lookalikes", label: "Lookalikes" },
-  { key: "contacts", label: "Contacts" },
-  { key: "sequence", label: "Sequence" },
-  { key: "review", label: "Review" },
-] as const;
+// Two ways to start a campaign. "customer" clones a seed customer into
+// lookalike companies; "pastUser" follows one person who used HROne at a
+// previous employer to the company they work at now. Both share the
+// Contacts → Sequence → Review back half.
+export type WizardMode = "customer" | "pastUser" | "director";
 
-export type WizardStepKey = (typeof WIZARD_STEPS)[number]["key"];
+export const WIZARD_STEPS_BY_MODE = {
+  customer: [
+    { key: "seed", label: "Customer" },
+    { key: "case", label: "Case study" },
+    { key: "lookalikes", label: "Lookalikes" },
+    { key: "contacts", label: "Contacts" },
+    { key: "sequence", label: "Sequence" },
+    { key: "review", label: "Review" },
+  ],
+  pastUser: [
+    { key: "pastuser", label: "Past user" },
+    { key: "case", label: "Case study" },
+    { key: "contacts", label: "Contacts" },
+    { key: "sequence", label: "Sequence" },
+    { key: "review", label: "Review" },
+  ],
+  director: [
+    { key: "director", label: "Director" },
+    { key: "case", label: "Case study" },
+    { key: "contacts", label: "Contacts" },
+    { key: "sequence", label: "Sequence" },
+    { key: "review", label: "Review" },
+  ],
+} as const;
 
-export const WIZARD_META: Record<WizardStepKey, { crumb: string; title: string }> = {
-  seed: { crumb: "New campaign · 1 of 6", title: "Which customer are we cloning?" },
-  case: { crumb: "New campaign · 2 of 6", title: "Case study record" },
-  lookalikes: { crumb: "New campaign · 3 of 6", title: "Lookalikes" },
-  contacts: { crumb: "New campaign · 4 of 6", title: "Contacts" },
-  sequence: { crumb: "New campaign · 5 of 6", title: "Sequence draft" },
-  review: { crumb: "New campaign · 6 of 6", title: "Review & approve" },
+export type WizardStepKey = (typeof WIZARD_STEPS_BY_MODE)[WizardMode][number]["key"];
+
+export const WIZARD_TITLES: Record<WizardMode, Partial<Record<WizardStepKey, string>>> = {
+  customer: {
+    seed: "Which customer are we cloning?",
+    case: "Case study record",
+    lookalikes: "Lookalikes",
+    contacts: "Contacts",
+    sequence: "Sequence draft",
+    review: "Review & approve",
+  },
+  pastUser: {
+    pastuser: "Who used HROne before?",
+    case: "Their old company's case study",
+    contacts: "Contacts at their new company",
+    sequence: "Sequence draft",
+    review: "Review & approve",
+  },
+  director: {
+    director: "Which director are we following?",
+    case: "Their HROne company's case study",
+    contacts: "Contacts at their other companies",
+    sequence: "Sequence draft",
+    review: "Review & approve",
+  },
+};
+
+// A director of an HROne customer, and the other companies Apollo lists
+// them at. Board seats come from their public profile, so the rep can add
+// companies Apollo missed.
+export type DirectorCompany = {
+  id: string;
+  name: string;
+  domain: string;
+  // Their title at this company, e.g. "Executive Director".
+  title: string;
+  // "board": reads as a board seat or ownership. "maybe": a director title
+  // that could be a job ("Director of Sales"). "job": anything else.
+  kind: "board" | "maybe" | "job";
+  employees: string;
+  location: string;
+  industry: string;
+  manual?: boolean;
+};
+
+export type DirectorMatch = {
+  status: "found" | "not_found";
+  name: string;
+  // Their title at the HROne customer.
+  title: string;
+  linkedin: string;
+  location: string;
+  customer: { name: string; domain: string };
+  companies: DirectorCompany[];
+  checkedAt: string;
+};
+
+// A person who used HROne at a previous employer, and where Apollo says they
+// work now. "moved" is the only status a campaign can be built on.
+export type PastUserMatch = {
+  status: "moved" | "same" | "not_found";
+  name: string;
+  oldCompany: { name: string; domain: string };
+  current?: {
+    company: string;
+    domain: string;
+    title: string;
+    email: string;
+    linkedin: string;
+    employees: string;
+    location: string;
+  };
+  // Set when the email Apollo returned doesn't sit on the new company's
+  // domain — it may be stale, so the rep should check it.
+  emailWarning?: string;
+  // Whether their job history shows them at the old company, in the
+  // position the rep gave. Matters most without an email, when Apollo
+  // matches on name + company and could pick a namesake.
+  verification?: {
+    // confirmed: a role at the old company, in a matching position (or any
+    // position, if the rep gave none). title_differs: at the old company,
+    // but not in that position. unconfirmed: the old company isn't there.
+    status: "confirmed" | "title_differs" | "unconfirmed";
+    // The matching role, e.g. "Human Resources Manager at Walsons, 2023–2026".
+    role?: string;
+  };
+  checkedAt: string;
 };
 
 export type CaseQuestion = {
@@ -170,6 +270,9 @@ export type ContactGroup = {
     // /api/contacts/reveal-webhook); "pending" while we're waiting on that.
     id?: string | null;
     revealStatus?: "pending" | "unavailable";
+    // The past HROne user this campaign follows (past-user mode only). They
+    // get their own email track rather than the HR team's.
+    pastUser?: boolean;
   }[];
 };
 
@@ -215,6 +318,15 @@ export const CONTACT_GROUPS: ContactGroup[] = [
   },
 ];
 
+// One web page found while researching a target company.
+export type ResearchSource = {
+  title: string;
+  url: string;
+  publishedDate: string;
+  source: "website" | "news";
+  summary?: string;
+};
+
 export type SequenceStep = {
   step: string;
   day: string;
@@ -226,6 +338,8 @@ export type SequenceStep = {
   cta: string;
   ps: string;
   sources: string[];
+  // Web pages behind any company research this step mentions.
+  research?: ResearchSource[];
   // What this step picks up from the one before it (empty for step 1).
   connection?: string;
   state: "Drafted" | "Needs edit";

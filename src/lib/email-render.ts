@@ -1,5 +1,5 @@
 // How one sequence step becomes the email a recipient reads. Shared by the
-// Smartlead launch (which turns these paragraphs into HTML) and the Sequence
+// Smartlead launch (which sends these paragraphs as plain text) and the Sequence
 // step's preview, so what the reviewer sees is what gets sent.
 
 export type EmailParts = {

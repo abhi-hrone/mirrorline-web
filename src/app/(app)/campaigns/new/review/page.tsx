@@ -37,7 +37,11 @@ function ReviewContent() {
     emails,
     companies,
     contactGroups,
+    mode,
+    pastUserMatch,
+    pastUserCampaignUrl,
   } = useWizard();
+  const pastUserMode = mode === "pastUser";
   const allChecked = isExisting || checks.every(Boolean);
   const remaining = checks.filter((v) => !v).length;
   const companyCount = pickedCompanies(companies, picked).length;
@@ -82,14 +86,24 @@ function ReviewContent() {
               ))}
             </div>
             <div className="mt-7 flex flex-wrap gap-3">
-              {smartleadCampaignUrl && (
+              {pastUserCampaignUrl && (
+                <a
+                  href={pastUserCampaignUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block cursor-pointer rounded-md bg-accent px-[22px] py-3 text-sm font-semibold text-ink"
+                >
+                  Open {pastUserMatch?.name ?? "past user"}&apos;s campaign
+                </a>
+              )}
+              {smartleadCampaignUrl && smartleadCampaignUrl !== pastUserCampaignUrl && (
                 <a
                   href={smartleadCampaignUrl}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-block cursor-pointer rounded-md bg-accent px-[22px] py-3 text-sm font-semibold text-ink"
                 >
-                  Open in Smartlead
+                  {pastUserMode ? "Open HR team campaign" : "Open in Smartlead"}
                 </a>
               )}
               <Link
@@ -200,7 +214,9 @@ function ReviewContent() {
               {launchStatus === "error"
                 ? launchError
                 : allChecked
-                  ? "Creates a draft Smartlead campaign with the sequence and revealed contacts."
+                  ? pastUserMode
+                    ? `Creates two Smartlead campaigns: one to ${pastUserMatch?.name ?? "the past user"}, and one to the HR team starting 3 days later.`
+                    : "Creates a draft Smartlead campaign with the sequence and revealed contacts."
                   : `${remaining} ${remaining === 1 ? "check" : "checks"} remaining`}
             </span>
           </div>

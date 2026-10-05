@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useWizard } from "@/lib/wizard-context";
-import { SEQUENCE_STYLES, type SequenceStep } from "@/lib/mock-data";
+import { PAST_USER_SEQUENCE, useWizard } from "@/lib/wizard-context";
+import { SEQUENCE_STYLES, type ResearchSource, type SequenceStep } from "@/lib/mock-data";
 import { emailParagraphs, fillMergeTokens, type MergeValues } from "@/lib/email-render";
 import {
   CAMPAIGN_TYPES,
@@ -29,12 +29,21 @@ export default function SequencePage() {
     contactGroups,
     sequenceCompanies,
     sequences,
+    companyResearch,
     activeSequenceDomain,
     setActiveSequenceDomain,
     sequenceProgress,
     redraftCompany,
+    mode,
+    pastUserMatch,
+    redraftPastUserTrack,
   } = useWizard();
   const campaignType = campaignTypeById(campaignTypeId);
+  // Past-user mode has one company and two tracks: the past user's own, and
+  // the HR team's. The track being viewed decides who the preview is for.
+  const pastUserMode = mode === "pastUser";
+  const viewingPastUser = pastUserMode && activeSequenceDomain === PAST_USER_SEQUENCE;
+  const companyDomain = viewingPastUser ? (sequenceCompanies[0]?.domain ?? "") : activeSequenceDomain;
 
   // Drafted emails open as a preview; Edit shows the raw fields.
   const [modes, setModes] = useState<Record<string, "preview" | "edit">>({});
@@ -45,11 +54,12 @@ export default function SequencePage() {
   // Preview as a real recipient at the company being viewed: the first contact
   // with an email (they're the ones who get sent), else anyone found there,
   // else a placeholder.
-  const activeCompany = sequenceCompanies.find((c) => c.domain === activeSequenceDomain);
-  const activeGroups = contactGroups.filter((g) => g.domain === activeSequenceDomain);
+  const activeCompany = sequenceCompanies.find((c) => c.domain === companyDomain);
+  const activeGroups = contactGroups.filter((g) => g.domain === companyDomain);
+  const forTrack = (p: { pastUser?: boolean }) => (viewingPastUser ? !!p.pastUser : !p.pastUser);
   const sample =
-    activeGroups.flatMap((g) => g.people.filter((p) => p.email).map((p) => ({ g, p })))[0] ??
-    activeGroups.flatMap((g) => g.people.map((p) => ({ g, p })))[0];
+    activeGroups.flatMap((g) => g.people.filter((p) => p.email && forTrack(p)).map((p) => ({ g, p })))[0] ??
+    activeGroups.flatMap((g) => g.people.filter(forTrack).map((p) => ({ g, p })))[0];
   const recipient: Recipient = sample
     ? {
         firstName: sample.p.name.trim().split(/\s+/)[0] || "there",
@@ -72,6 +82,14 @@ export default function SequencePage() {
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[900px] flex-col gap-3.5">
         <div className="flex flex-col gap-5 rounded-[10px] border border-line bg-white p-5">
+          {pastUserMode && (
+            <p className="rounded-md bg-paper px-3.5 py-2.5 text-[12.5px] leading-relaxed text-[#55513F]">
+              These settings are for the <span className="font-medium text-ink">HR team&apos;s</span>{" "}
+              emails, which mention {pastUserMatch?.name ?? "the past user"} and start 3 days after
+              their own. {pastUserMatch?.name ?? "The past user"}&apos;s own emails follow a fixed
+              3-email plan.
+            </p>
+          )}
           <div className="flex flex-col gap-2.5">
             <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
               Campaign type
@@ -159,7 +177,9 @@ export default function SequencePage() {
               ? `Add the campaign brief to draft a ${campaignType.label.toLowerCase()} sequence.`
               : sequenceStatus === "loading"
                 ? `Drafting ${sequenceProgress.done} of ${sequenceProgress.total}…`
-                : sequenceCompanies.length === 0
+                : pastUserMode
+                  ? `Draft two tracks: one to ${pastUserMatch?.name ?? "the past user"}, one to the HR team at ${sequenceCompanies[0]?.name ?? "their new company"}.`
+                  : sequenceCompanies.length === 0
                   ? "No companies picked yet — this drafts one shared sequence for the whole campaign."
                   : emails.length > 0
                     ? `Redraft all ${sequenceCompanies.length} companies' sequences with the settings above.`
@@ -174,14 +194,64 @@ export default function SequencePage() {
               ? "Drafting…"
               : emails.length > 0
                 ? "Regenerate all"
-                : sequenceCompanies.length > 1
+                : pastUserMode
+                  ? "Generate both tracks"
+                  : sequenceCompanies.length > 1
                   ? `Generate ${sequenceCompanies.length} sequences`
                   : "Generate sequence"}
           </button>
         </div>
         {sequenceError && <p className="text-[13px] text-[#B3402A]">{sequenceError}</p>}
 
-        {sequenceCompanies.length > 0 && Object.keys(sequences).length > 0 && (
+        {pastUserMode && activeCompany && Object.keys(sequences).length > 0 && (
+          <div className="flex flex-col gap-2.5 rounded-[10px] border border-line bg-white px-5 py-4">
+            <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
+              Track
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { key: PAST_USER_SEQUENCE, label: `${pastUserMatch?.name ?? "Past user"} · past user · day 0` },
+                { key: activeCompany.domain, label: `HR team at ${activeCompany.name} · day 3` },
+              ].map((t) => {
+                const drafted = !!sequences[t.key];
+                const active = t.key === activeSequenceDomain;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setActiveSequenceDomain(t.key)}
+                    disabled={!drafted}
+                    aria-pressed={active}
+                    className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs disabled:opacity-60 ${
+                      active ? "border-ink bg-ink text-paper" : "border-line bg-white text-[#55513F]"
+                    }`}
+                  >
+                    {t.label}
+                    {!drafted && " · not drafted"}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() =>
+                  viewingPastUser ? redraftPastUserTrack() : redraftCompany(activeCompany.domain)
+                }
+                disabled={sequenceStatus === "loading"}
+                className="ml-auto cursor-pointer rounded-md border border-line px-[13px] py-[7px] text-xs font-medium text-[#55513F] disabled:opacity-60"
+              >
+                Redraft this track
+              </button>
+            </div>
+            {companyResearch[activeCompany.domain] && (
+              <ResearchPanel
+                findings={companyResearch[activeCompany.domain]}
+                usedBy={emails.map((e) => e.research?.map((r) => r.url) ?? [])}
+              />
+            )}
+          </div>
+        )}
+
+        {!pastUserMode && sequenceCompanies.length > 0 && Object.keys(sequences).length > 0 && (
           <div className="flex flex-col gap-2.5 rounded-[10px] border border-line bg-white px-5 py-4">
             <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
               Company · {draftedCount} of {sequenceCompanies.length} drafted
@@ -230,6 +300,12 @@ export default function SequencePage() {
                   Redraft {activeCompany.name}
                 </button>
               </div>
+            )}
+            {activeCompany && companyResearch[activeCompany.domain] && (
+              <ResearchPanel
+                findings={companyResearch[activeCompany.domain]}
+                usedBy={emails.map((e) => e.research?.map((r) => r.url) ?? [])}
+              />
             )}
           </div>
         )}
@@ -372,6 +448,31 @@ export default function SequencePage() {
                   Rewrite this step
                 </button>
               </div>
+              {email.research && email.research.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <span className="font-mono text-[10.5px] text-muted">Web sources</span>
+                  {email.research.map((r) => (
+                    <a
+                      key={r.url}
+                      href={r.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex flex-wrap items-baseline gap-x-2 text-[12.5px] text-teal hover:underline"
+                    >
+                      <span>{r.title || r.url}</span>
+                      <span className="font-mono text-[10.5px] text-muted">
+                        {[
+                          r.source === "news" ? "News" : "Company website",
+                          new URL(r.url).hostname.replace(/^www\./, ""),
+                          r.publishedDate,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -385,6 +486,58 @@ export default function SequencePage() {
           </Link>
         )}
       </div>
+    </div>
+  );
+}
+
+// Everything the web search found for the company being viewed, and which
+// email (if any) mentions each finding — so a reviewer can check the claim.
+function ResearchPanel({ findings, usedBy }: { findings: ResearchSource[]; usedBy: string[][] }) {
+  return (
+    <div className="flex flex-col gap-2 border-t border-[#F0EBE0] pt-3">
+      <span className="font-mono text-[10.5px] tracking-[0.12em] text-[#6E6A5C] uppercase">
+        Web research · {findings.length} found
+      </span>
+      {findings.length === 0 && (
+        <p className="text-[12.5px] text-muted">
+          Nothing useful turned up on the web for this company, so the emails are written from the
+          company facts alone.
+        </p>
+      )}
+      {findings.map((f) => {
+        const emailsUsing = usedBy
+          .map((urls, i) => (urls.includes(f.url) ? `Email ${i + 1}` : ""))
+          .filter(Boolean);
+        return (
+          <div key={f.url} className="flex flex-col gap-0.5 text-[12.5px]">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <a
+                href={f.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium text-teal hover:underline"
+              >
+                {f.title || f.url}
+              </a>
+              <span className="font-mono text-[10.5px] text-muted">
+                {[
+                  f.source === "news" ? "News" : "Company website",
+                  new URL(f.url).hostname.replace(/^www\./, ""),
+                  f.publishedDate,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+              {emailsUsing.length > 0 && (
+                <span className="rounded-full border border-[#E5DAC0] bg-[#F2EDDF] px-[7px] py-px text-[10.5px] text-[#7A5B27]">
+                  Used in {emailsUsing.join(", ")}
+                </span>
+              )}
+            </div>
+            {f.summary && <p className="leading-relaxed text-[#55513F]">{f.summary}</p>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -406,7 +559,6 @@ function EmailPreview({ email, recipient }: { email: SequenceStep; recipient: Re
         <div className="text-[15px] font-semibold text-ink">
           {fill(email.subject) || <span className="font-normal text-[#B3402A]">No subject</span>}
         </div>
-        {email.preheader && <div className="text-muted">{fill(email.preheader)}</div>}
       </div>
       <div className="flex flex-col gap-3 bg-white px-4 py-4 text-[14px] leading-relaxed text-ink">
         {emailParagraphs(email).map((p, i) => (

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useWizard } from "@/lib/wizard-context";
-import { CASE_QS, CASE_SECTIONS } from "@/lib/mock-data";
+import { CASE_QS, CASE_SECTIONS, CONTEXT_QS } from "@/lib/mock-data";
 
 export default function CaseStudyPage() {
   const {
@@ -13,11 +13,81 @@ export default function CaseStudyPage() {
     fillStatus,
     fillError,
     fillFromContent,
+    mode,
+    pastUserMatch,
+    directorMatch,
+    sequenceCompanies,
+    knownCaseStatus,
+    findKnownCaseStudy,
+    selectedCaseStudyUrl,
   } = useWizard();
+  const pastUserMode = mode === "pastUser";
+  const directorMode = mode === "director";
+  // Both modes start from one known HROne customer, so the case study is
+  // looked up for that exact company.
+  const knownMode = pastUserMode || directorMode;
+  const oldCompany = directorMode
+    ? (directorMatch?.customer.name ?? "their HROne company")
+    : (pastUserMatch?.oldCompany.name ?? "their old company");
+  const bareFact = directorMode
+    ? `${oldCompany} uses HROne and shares a director with each company`
+    : `${pastUserMatch?.name ?? "they"} used HROne at ${oldCompany}`;
+  // With no client facts at all, past-user emails fall back to the one thing
+  // we know: the person used HROne at their old company.
+  const noCaseFacts = CASE_QS.filter((q) => !CONTEXT_QS.includes(q.id)).every(
+    (q) => !(answers[q.id] || "").trim()
+  );
 
   return (
     <div className="px-5 pt-[22px] sm:px-10 sm:pt-[38px]">
       <div className="flex max-w-[820px] flex-col gap-4">
+        {knownMode && (
+          <div className="flex flex-col gap-2 rounded-[10px] border border-line bg-white p-5 sm:p-6">
+            <span className="font-mono text-[10.5px] tracking-[0.13em] text-teal uppercase">
+              {oldCompany}&apos;s case study
+            </span>
+            {knownCaseStatus === "loading" && (
+              <p className="text-[13.5px] text-[#55513F]">
+                Looking for HROne&apos;s published case study about {oldCompany}… this can take a
+                minute.
+              </p>
+            )}
+            {knownCaseStatus === "found" && (
+              <p className="text-[13.5px] text-[#55513F]">
+                Filled from HROne&apos;s published case study
+                {selectedCaseStudyUrl && (
+                  <>
+                    {" "}
+                    (
+                    <a href={selectedCaseStudyUrl} target="_blank" rel="noreferrer" className="text-teal underline">
+                      source
+                    </a>
+                    )
+                  </>
+                )}
+                . Check it&apos;s about {oldCompany} before moving on.
+              </p>
+            )}
+            {(knownCaseStatus === "none" || knownCaseStatus === "error") && (
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="flex-1 text-[13.5px] text-[#55513F]">
+                  {knownCaseStatus === "none"
+                    ? `HROne hasn't published a case study about ${oldCompany}.`
+                    : "The case study search failed."}{" "}
+                  Paste notes about their implementation below to fill the record. If you leave it
+                  empty, the emails only say that {bareFact} — no numbers.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => findKnownCaseStudy()}
+                  className="cursor-pointer rounded-md border border-line px-3 py-1.5 text-xs font-medium text-[#55513F]"
+                >
+                  Search again
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex flex-col gap-[14px] rounded-[10px] border border-line bg-white p-5 sm:p-6">
           <div className="flex items-center gap-3">
             <span className="font-mono text-[10.5px] tracking-[0.13em] text-teal uppercase">
@@ -101,13 +171,23 @@ export default function CaseStudyPage() {
 
         <div className="flex flex-wrap items-center gap-3">
           <Link
-            href="/campaigns/new/lookalikes"
+            href={knownMode ? "/campaigns/new/contacts" : "/campaigns/new/lookalikes"}
             className="cursor-pointer rounded-md bg-teal px-[22px] py-3 text-sm font-semibold text-paper"
           >
-            Find lookalikes
+            {pastUserMode
+              ? `Find contacts at ${pastUserMatch?.current?.company ?? "their new company"}`
+              : directorMode
+                ? `Find contacts at ${sequenceCompanies.length} ${sequenceCompanies.length === 1 ? "company" : "companies"}`
+                : "Find lookalikes"}
           </Link>
           <span className="text-[12.5px] text-muted">
-            Saved continuously. Ocean only needs the domain.
+            {knownMode
+              ? noCaseFacts
+                ? directorMode
+                  ? `No case study facts — the emails will only mention that ${oldCompany} uses HROne.`
+                  : "No case study facts — the emails will only mention that they used HROne."
+                : "Saved continuously."
+              : "Saved continuously. Ocean only needs the domain."}
           </span>
         </div>
       </div>

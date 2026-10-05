@@ -116,6 +116,89 @@ export async function apolloRevealEmail(
   };
 }
 
+// One role from a person's profile, current or past.
+export type ApolloEmployment = {
+  organization_id?: string;
+  organization_name?: string;
+  title?: string;
+  current?: boolean;
+  start_date?: string;
+  end_date?: string;
+};
+
+// Looks up one known person — a past HROne user — and returns where Apollo
+// says they work now. With the email they had at their old company, Apollo
+// matches on that first. Without it, name + old company's domain still finds
+// people who've left, since Apollo matches on past employers too; the
+// employment history is then how we check it's the right person. Personal
+// emails aren't requested: the campaign writes to their new work address.
+export type ApolloPersonMatch = {
+  name?: string;
+  title?: string;
+  email?: string;
+  linkedin_url?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  organization?: {
+    name?: string;
+    primary_domain?: string;
+    website_url?: string;
+    estimated_num_employees?: number;
+  };
+  employment_history?: ApolloEmployment[];
+};
+
+export async function apolloMatchPerson(
+  key: string,
+  person: { name: string; email?: string; domain?: string }
+): Promise<ApolloPersonMatch | null> {
+  const res = await fetch(`${APOLLO_BASE_URL}/people/match`, {
+    method: "POST",
+    headers: apolloHeaders(key),
+    body: JSON.stringify({
+      name: person.name,
+      ...(person.email && { email: person.email }),
+      ...(person.domain && { domain: person.domain }),
+      reveal_personal_emails: false,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Apollo people/match returned ${res.status}: ${await res.text()}`);
+  }
+  const data = (await res.json()) as { person?: ApolloPersonMatch | null };
+  const match = data.person ?? null;
+  // Same placeholder as in apolloRevealEmail: a match with no revealable email.
+  if (match?.email?.startsWith("email_not_unlocked")) match.email = undefined;
+  return match;
+}
+
+// Looks up a director of an HROne customer by name and the customer's
+// domain. `employment_history` lists every role on their profile, board
+// seats included — but only the ones they've listed publicly.
+export type ApolloDirectorMatch = ApolloPersonMatch;
+
+export async function apolloMatchDirector(
+  key: string,
+  person: { name: string; domain: string; linkedin_url?: string }
+): Promise<ApolloDirectorMatch | null> {
+  const res = await fetch(`${APOLLO_BASE_URL}/people/match`, {
+    method: "POST",
+    headers: apolloHeaders(key),
+    body: JSON.stringify({
+      name: person.name,
+      domain: person.domain,
+      ...(person.linkedin_url && { linkedin_url: person.linkedin_url }),
+      reveal_personal_emails: false,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Apollo people/match returned ${res.status}: ${await res.text()}`);
+  }
+  const data = (await res.json()) as { person?: ApolloDirectorMatch | null };
+  return data.person ?? null;
+}
+
 export type ApolloOrganization = {
   id?: string;
   name?: string;
@@ -126,7 +209,25 @@ export type ApolloOrganization = {
   // which can disagree with this (or be blank), so prefer this one.
   organization_country?: string;
   estimated_num_employees?: number;
+  industry?: string;
+  city?: string;
+  state?: string;
 };
+
+// One organization by Apollo's ID — the IDs that employment_history carries.
+export async function apolloGetOrganization(
+  key: string,
+  id: string
+): Promise<ApolloOrganization | null> {
+  const res = await fetch(`${APOLLO_BASE_URL}/organizations/${encodeURIComponent(id)}`, {
+    headers: apolloHeaders(key),
+  });
+  if (!res.ok) {
+    throw new Error(`Apollo organization ${id} returned ${res.status}: ${await res.text()}`);
+  }
+  const data = (await res.json()) as { organization?: ApolloOrganization };
+  return data.organization ?? null;
+}
 
 export async function apolloEnrichOrganization(
   key: string,

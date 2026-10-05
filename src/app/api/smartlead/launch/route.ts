@@ -7,6 +7,10 @@ export const maxDuration = 60;
 
 const SMARTLEAD_BASE_URL = "https://server.smartlead.ai/api/v1";
 
+// In past-user mode the HR team's campaign starts this many days after the
+// past user's, so the past user hears from us before colleagues hear their name.
+const TEAM_TRACK_DELAY_DAYS = 3;
+
 type StepIn = {
   day: string;
   subject: string;
@@ -16,8 +20,17 @@ type StepIn = {
   cta: string;
   ps: string;
 };
-type PersonIn = { name: string; title: string; email: string; phone?: string };
+type PersonIn = { name: string; title: string; email: string; phone?: string; pastUser?: boolean };
 type GroupIn = { company: string; domain: string; people: PersonIn[] };
+type PastUserIn = { name: string; title: string; email: string; company: string; steps: StepIn[] };
+type Lead = {
+  email: string;
+  first_name: string;
+  last_name: string;
+  company_name: string;
+  phone_number?: string;
+  custom_fields: Record<string, string>;
+};
 
 function smartleadUrl(path: string, apiKey: string) {
   return `${SMARTLEAD_BASE_URL}${path}?api_key=${encodeURIComponent(apiKey)}`;
@@ -31,16 +44,36 @@ function smartleadUrl(path: string, apiKey: string) {
 const subjectField = (i: number) => `s${i + 1}_subject`;
 const bodyField = (i: number) => `s${i + 1}_body`;
 
+// Emails go out as plain text — no HTML, no links — so the body is just the
+// paragraphs separated by blank lines. Plain text has no hidden preview
+// line, so the preheader isn't sent; inboxes preview the opening line.
 function toEmailBody(step: StepIn, values: MergeValues) {
-  const paragraphs = emailParagraphs(step)
-    .map((p) => `<p>${fillMergeTokens(p, values)}</p>`)
-    .join("");
-  // The preheader rides as a hidden first line so inboxes show it as the
-  // preview text instead of repeating the opening sentence.
-  const preheader = step.preheader
-    ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0">${fillMergeTokens(step.preheader, values)}</div>`
-    : "";
-  return `${preheader}${paragraphs}`;
+  return emailParagraphs(step)
+    .map((p) => fillMergeTokens(p, values))
+    .join("\n\n");
+}
+
+function toLead(person: PersonIn, company: string, steps: StepIn[]): Lead {
+  const [firstName, ...rest] = person.name.trim().split(/\s+/);
+  const values: MergeValues = {
+    firstName: firstName || "there",
+    title: person.title || "",
+    company,
+  };
+  const copy = Object.fromEntries(
+    steps.flatMap((s, i) => [
+      [subjectField(i), fillMergeTokens(s.subject, values)],
+      [bodyField(i), toEmailBody(s, values)],
+    ])
+  );
+  return {
+    email: person.email,
+    first_name: firstName ?? "",
+    last_name: rest.join(" "),
+    company_name: company,
+    phone_number: person.phone || undefined,
+    custom_fields: { title: person.title || "", ...copy },
+  };
 }
 
 function parseDay(day: string) {
@@ -74,6 +107,187 @@ function toStepDelays(steps: StepIn[]) {
   return days.map((d, i) => (i === 0 ? 0 : Math.max(0, d - days[i - 1])));
 }
 
+class LaunchError extends Error {
+  constructor(
+    message: string,
+    public campaignId?: number
+  ) {
+    super(message);
+  }
+}
+
+// Creates one Smartlead campaign with its steps and leads, sends it as plain
+// text, and starts it if a mailbox is connected. `startAt` delays the first
+// send (Smartlead's schedule_start_time).
+async function launchCampaign(
+  apiKey: string,
+  opts: {
+    name: string;
+    seedName: string;
+    seedWebsite: string;
+    companies: number;
+    steps: StepIn[];
+    leads: Lead[];
+    startAt?: Date;
+  }
+) {
+  // 1. Create the campaign. It starts in DRAFTED status.
+  const createRes = await fetch(smartleadUrl("/campaigns/create", apiKey), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: opts.name }),
+  });
+  if (!createRes.ok) {
+    console.error("Smartlead campaign create failed", createRes.status, await createRes.text());
+    throw new LaunchError(`Smartlead returned ${createRes.status} creating the campaign.`);
+  }
+  const created = (await createRes.json()) as { id?: number };
+  const campaignId = created.id;
+  if (!campaignId) throw new LaunchError("Smartlead did not return a campaign id.");
+
+  // Record the seed customer so the campaigns list can show it — Smartlead
+  // has no field for it. Best-effort: a Mongo hiccup shouldn't fail a launch
+  // that Smartlead already accepted.
+  await saveLaunchedCampaign({
+    _id: campaignId,
+    name: opts.name,
+    seedName: opts.seedName,
+    seedWebsite: opts.seedWebsite,
+    companies: opts.companies,
+    steps: opts.steps.length,
+  }).catch((err) => console.error("Campaign metadata save failed", campaignId, err));
+
+  // 2. Push the sequence steps.
+  const delays = toStepDelays(opts.steps);
+  const sequences = opts.steps.map((s, i) => ({
+    seq_number: i + 1,
+    subject: `{{${subjectField(i)}}}`,
+    email_body: `{{${bodyField(i)}}}`,
+    seq_delay_details: { delay_in_days: delays[i] },
+  }));
+  const seqRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/sequences`, apiKey), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sequences }),
+  });
+  if (!seqRes.ok) {
+    console.error("Smartlead sequence save failed", seqRes.status, await seqRes.text());
+    throw new LaunchError(`Smartlead returned ${seqRes.status} saving the sequence.`, campaignId);
+  }
+
+  // Send as plain text. Open and click tracking are off too: both work by
+  // injecting HTML (a tracking pixel, rewritten links) into the email.
+  const settingsRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/settings`, apiKey), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      send_as_plain_text: true,
+      track_settings: ["DONT_TRACK_EMAIL_OPEN", "DONT_TRACK_LINK_CLICK"],
+    }),
+  });
+  if (!settingsRes.ok) {
+    console.error("Smartlead settings save failed", settingsRes.status, await settingsRes.text());
+    throw new LaunchError(
+      `Smartlead returned ${settingsRes.status} saving the plain-text setting.`,
+      campaignId
+    );
+  }
+
+  // 3. Add the revealed contacts as leads.
+  const leadsRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/leads`, apiKey), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lead_list: opts.leads }),
+  });
+  if (!leadsRes.ok) {
+    console.error("Smartlead add leads failed", leadsRes.status, await leadsRes.text());
+    throw new LaunchError(`Smartlead returned ${leadsRes.status} adding leads.`, campaignId);
+  }
+
+  // 4. Look for mailboxes already connected to this Smartlead account (a
+  // one-time OAuth/SMTP setup done in the Smartlead dashboard — this app
+  // has no flow for adding mailbox credentials). If any exist, assign them,
+  // attach a default send schedule (Smartlead refuses to start without
+  // one — "Cron Exp value is empty"), and start sending immediately.
+  // Otherwise leave the campaign as a draft for a human to finish.
+  const acctRes = await fetch(
+    `${smartleadUrl("/email-accounts/", apiKey)}&limit=100&isSmtpSuccess=true`
+  );
+  let started = false;
+  let senderCount = 0;
+  if (acctRes.ok) {
+    const accounts = (await acctRes.json()) as { id: number }[];
+    const accountIds = (Array.isArray(accounts) ? accounts : []).map((a) => a.id);
+    senderCount = accountIds.length;
+
+    if (accountIds.length > 0) {
+      const assignRes = await fetch(
+        smartleadUrl(`/campaigns/${campaignId}/email-accounts`, apiKey),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email_account_ids: accountIds }),
+        }
+      );
+      if (!assignRes.ok) {
+        console.error(
+          "Smartlead sender assignment failed",
+          assignRes.status,
+          await assignRes.text()
+        );
+      } else {
+        // Default sending window: Tuesday to Thursday, 10 AM to 5 PM IST —
+        // the B2B window that works best for Indian recipients — plus
+        // today if launching on some other weekday (see sendDaysForLaunch).
+        // There's no UI yet to configure this per campaign.
+        const scheduleRes = await fetch(
+          smartleadUrl(`/campaigns/${campaignId}/schedule`, apiKey),
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              timezone: "Asia/Kolkata",
+              days_of_the_week: opts.startAt ? [1, 2, 3, 4, 5] : sendDaysForLaunch(),
+              start_hour: "10:00",
+              end_hour: "17:00",
+              min_time_btw_emails: 15,
+              max_new_leads_per_day: 50,
+              ...(opts.startAt && { schedule_start_time: opts.startAt.toISOString() }),
+            }),
+          }
+        );
+        if (!scheduleRes.ok) {
+          console.error(
+            "Smartlead schedule save failed",
+            scheduleRes.status,
+            await scheduleRes.text()
+          );
+        }
+
+        const startRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/status`, apiKey), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "START" }),
+        });
+        if (!startRes.ok) {
+          console.error("Smartlead campaign start failed", startRes.status, await startRes.text());
+        } else {
+          started = true;
+        }
+      }
+    }
+  } else {
+    console.error("Smartlead email-accounts fetch failed", acctRes.status, await acctRes.text());
+  }
+
+  return {
+    campaignId,
+    campaignUrl: `https://app.smartlead.ai/app/email-campaigns-v2/${campaignId}/leads`,
+    started,
+    senderCount,
+  };
+}
+
 export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
   const apiKey = process.env.SMARTLEAD_API_KEY;
   if (!apiKey) {
@@ -96,12 +310,22 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
   const steps: StepIn[] = Object.values(sequencesIn).find((s) => Array.isArray(s) && s.length) ?? [];
   const seedName = typeof body.seedName === "string" ? body.seedName.trim() : "";
   const seedWebsite = typeof body.seedWebsite === "string" ? body.seedWebsite.trim() : "";
+  // Past-user mode: the person themselves, with their own track.
+  const pastUserIn = body.pastUser && typeof body.pastUser === "object" ? body.pastUser : null;
+  const pastUser: PastUserIn | null =
+    pastUserIn &&
+    typeof pastUserIn.email === "string" &&
+    pastUserIn.email &&
+    Array.isArray(pastUserIn.steps) &&
+    pastUserIn.steps.length > 0
+      ? pastUserIn
+      : null;
 
   if (!campaignName) {
     console.error("Smartlead launch rejected: campaignName missing", { body });
     return NextResponse.json({ error: "campaignName is required." }, { status: 400 });
   }
-  if (steps.length === 0) {
+  if (steps.length === 0 && !pastUser) {
     console.error("Smartlead launch rejected: no sequence steps", { campaignName });
     return NextResponse.json(
       { error: "No sequence steps to send — draft the sequence first." },
@@ -115,36 +339,18 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
     .filter((g) => g.people.some((p) => p.email) && stepsFor(g.domain).length !== steps.length)
     .map((g) => g.company);
 
+  // The past user gets their own track, never the team's — even if the
+  // client left them in the group.
+  const pastUserEmail = pastUser?.email.toLowerCase();
   const leadList = groups
-    .filter((g) => stepsFor(g.domain).length === steps.length)
+    .filter((g) => steps.length > 0 && stepsFor(g.domain).length === steps.length)
     .flatMap((g) =>
       g.people
-        .filter((p) => p.email)
-        .map((p) => {
-          const [firstName, ...rest] = p.name.trim().split(/\s+/);
-          const values: MergeValues = {
-            firstName: firstName || "there",
-            title: p.title || "",
-            company: g.company,
-          };
-          const copy = Object.fromEntries(
-            stepsFor(g.domain).flatMap((s, i) => [
-              [subjectField(i), fillMergeTokens(s.subject, values)],
-              [bodyField(i), toEmailBody(s, values)],
-            ])
-          );
-          return {
-            email: p.email,
-            first_name: firstName ?? "",
-            last_name: rest.join(" "),
-            company_name: g.company,
-            phone_number: p.phone || undefined,
-            custom_fields: { title: p.title || "", ...copy },
-          };
-        })
+        .filter((p) => p.email && !p.pastUser && p.email.toLowerCase() !== pastUserEmail)
+        .map((p) => toLead(p, g.company, stepsFor(g.domain)))
     );
 
-  if (leadList.length === 0) {
+  if (leadList.length === 0 && !pastUser) {
     console.error("Smartlead launch rejected: no contacts with an email", {
       campaignName,
       groupCount: groups.length,
@@ -162,161 +368,54 @@ export const POST = withRequestLog("smartlead", async (req: NextRequest) => {
   }
 
   try {
-    // 1. Create the campaign. It starts in DRAFTED status.
-    const createRes = await fetch(smartleadUrl("/campaigns/create", apiKey), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: campaignName }),
-    });
-    if (!createRes.ok) {
-      console.error("Smartlead campaign create failed", createRes.status, await createRes.text());
-      return NextResponse.json(
-        { error: `Smartlead returned ${createRes.status} creating the campaign.` },
-        { status: 502 }
-      );
-    }
-    const created = (await createRes.json()) as { id?: number };
-    const campaignId = created.id;
-    if (!campaignId) {
-      return NextResponse.json(
-        { error: "Smartlead did not return a campaign id." },
-        { status: 502 }
-      );
-    }
+    // Past user first: their campaign starts now, and the team's waits a few
+    // days behind it.
+    const pastUserResult = pastUser
+      ? await launchCampaign(apiKey, {
+          name: `${campaignName} · ${pastUser.name}`,
+          seedName,
+          seedWebsite,
+          companies: 1,
+          steps: pastUser.steps,
+          leads: [toLead(pastUser, pastUser.company, pastUser.steps)],
+        })
+      : null;
 
-    // Record the seed customer so the campaigns list can show it — Smartlead
-    // has no field for it. Best-effort: a Mongo hiccup shouldn't fail a launch
-    // that Smartlead already accepted.
-    await saveLaunchedCampaign({
-      _id: campaignId,
-      name: campaignName,
-      seedName,
-      seedWebsite,
-      companies: groups.length,
-      steps: steps.length,
-    }).catch((err) => console.error("Campaign metadata save failed", campaignId, err));
+    const teamResult =
+      leadList.length > 0
+        ? await launchCampaign(apiKey, {
+            name: pastUser ? `${campaignName} · HR team` : campaignName,
+            seedName,
+            seedWebsite,
+            companies: groups.length,
+            steps,
+            leads: leadList,
+            startAt: pastUser
+              ? new Date(Date.now() + TEAM_TRACK_DELAY_DAYS * 24 * 60 * 60 * 1000)
+              : undefined,
+          })
+        : null;
 
-    // 2. Push the sequence steps.
-    const delays = toStepDelays(steps);
-    const sequences = steps.map((s, i) => ({
-      seq_number: i + 1,
-      subject: `{{${subjectField(i)}}}`,
-      email_body: `{{${bodyField(i)}}}`,
-      seq_delay_details: { delay_in_days: delays[i] },
-    }));
-    const seqRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/sequences`, apiKey), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sequences }),
-    });
-    if (!seqRes.ok) {
-      console.error("Smartlead sequence save failed", seqRes.status, await seqRes.text());
-      return NextResponse.json(
-        { error: `Smartlead returned ${seqRes.status} saving the sequence.`, campaignId },
-        { status: 502 }
-      );
-    }
-
-    // 3. Add the revealed contacts as leads.
-    const leadsRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/leads`, apiKey), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lead_list: leadList }),
-    });
-    if (!leadsRes.ok) {
-      console.error("Smartlead add leads failed", leadsRes.status, await leadsRes.text());
-      return NextResponse.json(
-        { error: `Smartlead returned ${leadsRes.status} adding leads.`, campaignId },
-        { status: 502 }
-      );
-    }
-
-    // 4. Look for mailboxes already connected to this Smartlead account (a
-    // one-time OAuth/SMTP setup done in the Smartlead dashboard — this app
-    // has no flow for adding mailbox credentials). If any exist, assign them,
-    // attach a default send schedule (Smartlead refuses to start without
-    // one — "Cron Exp value is empty"), and start sending immediately.
-    // Otherwise leave the campaign as a draft for a human to finish.
-    const acctRes = await fetch(
-      `${smartleadUrl("/email-accounts/", apiKey)}&limit=100&isSmtpSuccess=true`
-    );
-    let started = false;
-    let senderCount = 0;
-    if (acctRes.ok) {
-      const accounts = (await acctRes.json()) as { id: number }[];
-      const accountIds = (Array.isArray(accounts) ? accounts : []).map((a) => a.id);
-      senderCount = accountIds.length;
-
-      if (accountIds.length > 0) {
-        const assignRes = await fetch(
-          smartleadUrl(`/campaigns/${campaignId}/email-accounts`, apiKey),
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email_account_ids: accountIds }),
-          }
-        );
-        if (!assignRes.ok) {
-          console.error(
-            "Smartlead sender assignment failed",
-            assignRes.status,
-            await assignRes.text()
-          );
-        } else {
-          // Default sending window: Tuesday to Thursday, 10 AM to 5 PM IST —
-          // the B2B window that works best for Indian recipients — plus
-          // today if launching on some other weekday (see sendDaysForLaunch).
-          // There's no UI yet to configure this per campaign.
-          const scheduleRes = await fetch(
-            smartleadUrl(`/campaigns/${campaignId}/schedule`, apiKey),
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                timezone: "Asia/Kolkata",
-                days_of_the_week: sendDaysForLaunch(),
-                start_hour: "10:00",
-                end_hour: "17:00",
-                min_time_btw_emails: 15,
-                max_new_leads_per_day: 50,
-              }),
-            }
-          );
-          if (!scheduleRes.ok) {
-            console.error(
-              "Smartlead schedule save failed",
-              scheduleRes.status,
-              await scheduleRes.text()
-            );
-          }
-
-          const startRes = await fetch(smartleadUrl(`/campaigns/${campaignId}/status`, apiKey), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "START" }),
-          });
-          if (!startRes.ok) {
-            console.error("Smartlead campaign start failed", startRes.status, await startRes.text());
-          } else {
-            started = true;
-          }
-        }
-      }
-    } else {
-      console.error("Smartlead email-accounts fetch failed", acctRes.status, await acctRes.text());
-    }
-
+    const primary = teamResult ?? pastUserResult;
     return NextResponse.json({
-      campaignId,
-      campaignUrl: `https://app.smartlead.ai/app/email-campaigns-v2/${campaignId}/leads`,
-      leadsAdded: leadList.length,
-      stepsAdded: sequences.length,
+      campaignId: primary?.campaignId,
+      campaignUrl: primary?.campaignUrl,
+      pastUserCampaignUrl: pastUserResult?.campaignUrl ?? null,
+      teamCampaignUrl: teamResult?.campaignUrl ?? null,
+      leadsAdded: leadList.length + (pastUserResult ? 1 : 0),
+      stepsAdded: steps.length,
       skippedCompanies,
-      started,
-      senderCount,
+      started: (pastUserResult?.started ?? true) && (teamResult?.started ?? true),
+      senderCount: primary?.senderCount ?? 0,
     });
   } catch (err) {
     console.error("Smartlead launch failed", err);
+    if (err instanceof LaunchError) {
+      return NextResponse.json(
+        { error: err.message, campaignId: err.campaignId },
+        { status: 502 }
+      );
+    }
     return NextResponse.json(
       { error: "Smartlead launch failed. Check server logs." },
       { status: 502 }
